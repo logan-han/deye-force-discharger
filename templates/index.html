@@ -1,0 +1,621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Deye Force Discharger</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            min-height: 100vh;
+            padding: 15px;
+        }
+        .container { max-width: 900px; margin: 0 auto; }
+        h1 { text-align: center; margin-bottom: 20px; color: #4ecca3; font-size: 1.5rem; }
+        .card {
+            background: #16213e;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+        }
+        .card h2 {
+            color: #4ecca3;
+            margin-bottom: 12px;
+            font-size: 1rem;
+            border-bottom: 1px solid #2a3f5f;
+            padding-bottom: 8px;
+        }
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 10px;
+        }
+        .status-item {
+            background: #1a1a2e;
+            padding: 12px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .status-item .label { font-size: 0.7rem; color: #888; margin-bottom: 4px; }
+        .status-item .value { font-size: 1.3rem; font-weight: bold; }
+        .status-item .value.active { color: #4ecca3; }
+        .status-item .value.inactive { color: #e94560; }
+
+        /* Gauge Sections */
+        .gauge-section {
+            margin-top: 12px;
+            padding: 10px;
+            background: #1a1a2e;
+            border-radius: 8px;
+        }
+        .gauge-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 6px;
+        }
+        .gauge-label {
+            font-size: 0.7rem;
+            color: #888;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .gauge-value {
+            font-size: 0.9rem;
+            font-weight: bold;
+            color: #4ecca3;
+        }
+
+        /* Power Gauge */
+        .power-gauge-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        .power-gauge {
+            flex: 1;
+            height: 24px;
+            background: #0d1321;
+            border-radius: 12px;
+            position: relative;
+            overflow: hidden;
+        }
+        .power-gauge-fill {
+            height: 100%;
+            border-radius: 12px;
+            transition: width 0.5s ease;
+            background: linear-gradient(90deg, #4ecca3, #ffc107, #e94560);
+        }
+        .power-gauge-label {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            font-size: 0.75rem;
+            font-weight: bold;
+            color: #fff;
+            text-shadow: 0 0 3px rgba(0,0,0,0.8);
+        }
+        .power-info {
+            text-align: right;
+            min-width: 100px;
+        }
+        .power-value { font-size: 1.2rem; font-weight: bold; color: #4ecca3; }
+        .power-max { font-size: 0.7rem; color: #666; }
+
+        /* SoC Bar */
+        .soc-section { margin-top: 12px; }
+        .soc-header { display: flex; justify-content: space-between; margin-bottom: 5px; }
+        .soc-header span { font-size: 0.75rem; color: #888; }
+        .soc-bar {
+            height: 16px;
+            background: #0d1321;
+            border-radius: 8px;
+            position: relative;
+            overflow: hidden;
+        }
+        .soc-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #e94560, #ffc107, #4ecca3);
+            transition: width 0.5s ease;
+        }
+        .soc-marker {
+            position: absolute;
+            top: 0;
+            height: 100%;
+            width: 2px;
+        }
+        .soc-marker.reserve { background: #e94560; }
+        .soc-marker.cutoff { background: #ffc107; }
+        .soc-legend {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 6px;
+            font-size: 0.65rem;
+        }
+        .soc-legend span { display: flex; align-items: center; gap: 4px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 2px; }
+        .legend-dot.reserve { background: #e94560; }
+        .legend-dot.cutoff { background: #ffc107; }
+        .legend-dot.current { background: #4ecca3; }
+
+        /* TOU Table */
+        .tou-table { width: 100%; border-collapse: collapse; font-size: 0.8rem; }
+        .tou-table th, .tou-table td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #2a3f5f; }
+        .tou-table th { color: #888; font-weight: normal; font-size: 0.7rem; }
+        .tou-status {
+            display: inline-block;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 0.7rem;
+        }
+        .tou-status.on { background: rgba(78, 204, 163, 0.2); color: #4ecca3; }
+        .tou-status.off { background: rgba(233, 69, 96, 0.2); color: #e94560; }
+        .tou-target { background: rgba(78, 204, 163, 0.1); }
+        .tou-target td:first-child { color: #4ecca3; font-weight: 600; }
+        .tou-legend { font-size: 0.65rem; color: #4ecca3; margin-top: 8px; text-align: right; }
+
+        /* Settings */
+        .settings-row {
+            display: flex;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+        .settings-group {
+            background: #1a1a2e;
+            padding: 10px 12px;
+            border-radius: 6px;
+        }
+        .settings-group-label {
+            font-size: 0.65rem;
+            color: #4ecca3;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 8px;
+        }
+        .settings-inline {
+            display: flex;
+            gap: 10px;
+        }
+        .setting-item { min-width: 80px; }
+        .setting-item label { display: block; font-size: 0.65rem; color: #888; margin-bottom: 3px; }
+        .setting-item input {
+            width: 100%;
+            padding: 6px 8px;
+            border: 1px solid #2a3f5f;
+            border-radius: 4px;
+            background: #0d1321;
+            color: #eee;
+            font-size: 0.85rem;
+        }
+        .setting-item input:focus { outline: none; border-color: #4ecca3; }
+        .scheduler-group {
+            flex: 1;
+        }
+        .scheduler-content {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .scheduler-status { font-size: 0.9rem; font-weight: bold; }
+        .scheduler-status.running { color: #4ecca3; }
+        .scheduler-status.stopped { color: #e94560; }
+        .scheduler-buttons { display: flex; gap: 6px; }
+        .btn-sm { padding: 5px 10px; font-size: 0.7rem; }
+        .btn-save {
+            margin-top: 12px;
+            width: 100%;
+        }
+        @media (max-width: 600px) {
+            .settings-row { flex-direction: column; }
+        }
+
+        /* Buttons */
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            font-size: 0.85rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .btn-primary { background: #4ecca3; color: #1a1a2e; }
+        .btn-primary:hover { background: #3db892; }
+        .btn-danger { background: #e94560; color: #fff; }
+        .btn-danger:hover { background: #d13654; }
+        .btn-full { width: 100%; margin-top: 10px; }
+
+        /* Toast */
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            padding: 12px 20px;
+            border-radius: 6px;
+            color: #fff;
+            transform: translateY(100px);
+            opacity: 0;
+            transition: all 0.3s;
+            z-index: 1000;
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.success { background: #4ecca3; }
+        .toast.error { background: #e94560; }
+
+        .refresh-indicator {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-left: 8px;
+        }
+        .refresh-indicator.active { background: #4ecca3; animation: pulse 1s infinite; }
+        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+        .error-msg { color: #e94560; font-size: 0.8rem; margin-top: 8px; }
+        .status-footer { display: flex; justify-content: space-between; font-size: 0.7rem; color: #555; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Deye Force Discharger <span class="refresh-indicator" id="refreshIndicator"></span></h1>
+
+        <!-- System Status -->
+        <div class="card">
+            <h2>System Status</h2>
+            <div class="status-grid">
+                <div class="status-item">
+                    <div class="label">Force Discharge</div>
+                    <div class="value" id="forceDischargeStatus">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">In Window</div>
+                    <div class="value" id="inWindow">--</div>
+                </div>
+                <div class="status-item">
+                    <div class="label">Battery SoC</div>
+                    <div class="value" id="currentSoc">--%</div>
+                </div>
+            </div>
+
+            <!-- Power Gauge -->
+            <div class="gauge-section">
+                <div class="gauge-label">Battery Output</div>
+                <div class="power-gauge-container">
+                    <div class="power-gauge">
+                        <div class="power-gauge-fill" id="powerGaugeFill" style="width: 0%"></div>
+                        <div class="power-gauge-label" id="powerGaugeLabel">0 W</div>
+                    </div>
+                    <div class="power-info">
+                        <div class="power-value" id="powerValue">-- kW</div>
+                        <div class="power-max">/ <span id="maxPowerDisplay">10</span> kW max</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- SoC Bar -->
+            <div class="gauge-section">
+                <div class="gauge-header">
+                    <span class="gauge-label">State of Charge</span>
+                    <span class="gauge-value" id="socValue">-- %</span>
+                </div>
+                <div class="soc-bar">
+                    <div class="soc-fill" id="socBar" style="width: 0%"></div>
+                    <div class="soc-marker reserve" id="reserveMarker" style="left: 20%"></div>
+                    <div class="soc-marker cutoff" id="cutoffMarker" style="left: 50%"></div>
+                </div>
+                <div class="soc-legend">
+                    <span><div class="legend-dot reserve"></div> Reserve <span id="reserveLabel">20%</span></span>
+                    <span><div class="legend-dot cutoff"></div> Cutoff <span id="cutoffLabel">50%</span></span>
+                    <span><div class="legend-dot current"></div> Current</span>
+                </div>
+            </div>
+            <div id="errorMsg" class="error-msg" style="display: none;"></div>
+        </div>
+
+        <!-- TOU Settings -->
+        <div class="card">
+            <h2>Inverter TOU Settings</h2>
+            <table class="tou-table">
+                <thead>
+                    <tr>
+                        <th>Time Range</th>
+                        <th>SoC</th>
+                        <th>Power</th>
+                        <th>Grid</th>
+                    </tr>
+                </thead>
+                <tbody id="touTableBody">
+                    <tr><td colspan="4" style="text-align: center; color: #888;">Loading...</td></tr>
+                </tbody>
+            </table>
+            <div class="tou-legend">* Force discharge window</div>
+        </div>
+
+        <!-- Settings & Scheduler -->
+        <div class="card">
+            <h2>Settings</h2>
+            <form id="scheduleForm">
+                <div class="settings-row">
+                    <div class="settings-group">
+                        <div class="settings-group-label">Discharge Window</div>
+                        <div class="settings-inline">
+                            <div class="setting-item">
+                                <label>Start</label>
+                                <input type="time" id="startTime" value="17:30">
+                            </div>
+                            <div class="setting-item">
+                                <label>End</label>
+                                <input type="time" id="endTime" value="19:30">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <div class="settings-group-label">Battery SoC Limits (%)</div>
+                        <div class="settings-inline">
+                            <div class="setting-item">
+                                <label>Normal</label>
+                                <input type="number" id="minSocReserve" min="5" max="100" value="20">
+                            </div>
+                            <div class="setting-item">
+                                <label>Discharge</label>
+                                <input type="number" id="cutoffSoc" min="5" max="100" value="50">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="settings-group">
+                        <div class="settings-group-label">Power</div>
+                        <div class="setting-item">
+                            <label>Max (W)</label>
+                            <input type="number" id="maxPowerInput" min="0" max="20000" value="10000">
+                        </div>
+                    </div>
+                    <div class="settings-group scheduler-group">
+                        <div class="settings-group-label">Scheduler</div>
+                        <div class="scheduler-content">
+                            <span class="scheduler-status" id="schedulerStatusLarge">STOPPED</span>
+                            <div class="scheduler-buttons">
+                                <button type="button" class="btn btn-sm btn-primary" id="startBtn" onclick="startScheduler()">Start</button>
+                                <button type="button" class="btn btn-sm btn-danger" id="stopBtn" onclick="stopScheduler()">Stop</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <button type="submit" class="btn btn-primary btn-save">Save & Update Inverter</button>
+            </form>
+        </div>
+
+        <!-- Status Footer -->
+        <div class="status-footer">
+            <span>Last: <span id="lastCheck">--</span></span>
+            <span>Server: <span id="serverTime">--</span></span>
+        </div>
+    </div>
+
+    <div class="toast" id="toast"></div>
+
+    <script>
+        let refreshInterval;
+        let maxPower = 10000;
+
+        function showToast(message, type = 'success') {
+            const toast = document.getElementById('toast');
+            toast.textContent = message;
+            toast.className = `toast ${type} show`;
+            setTimeout(() => { toast.className = 'toast'; }, 3000);
+        }
+
+        function formatTime(isoString) {
+            if (!isoString) return '--';
+            return new Date(isoString).toLocaleTimeString();
+        }
+
+        function updatePowerGauge(power) {
+            const gauge = document.getElementById('powerGaugeFill');
+            const label = document.getElementById('powerGaugeLabel');
+            const value = document.getElementById('powerValue');
+
+            if (power === null || power === undefined) {
+                gauge.style.width = '0%';
+                label.textContent = '-- W';
+                value.textContent = '-- kW';
+                return;
+            }
+
+            const absPower = Math.abs(power);
+            const percent = Math.min((absPower / maxPower) * 100, 100);
+            const direction = power > 0 ? 'Discharging' : power < 0 ? 'Charging' : '';
+
+            gauge.style.width = `${percent}%`;
+            gauge.style.background = power > 0
+                ? 'linear-gradient(90deg, #4ecca3, #ffc107)'
+                : 'linear-gradient(90deg, #4ecca3, #3498db)';
+            label.textContent = `${Math.round(absPower)} W`;
+            value.textContent = `${(absPower / 1000).toFixed(2)} kW`;
+            value.style.color = power > 0 ? '#4ecca3' : '#3498db';
+        }
+
+        function updateTouTable(touSettings, windowStart) {
+            const tbody = document.getElementById('touTableBody');
+
+            if (!touSettings) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #888;">Unable to fetch</td></tr>';
+                return;
+            }
+
+            const items = touSettings.timeUseSettingItems || [];
+            if (items.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: #888;">No schedules</td></tr>';
+                return;
+            }
+
+            const sortedItems = [...items].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+            // Normalize window start for comparison (remove colon)
+            const windowStartNorm = windowStart.replace(':', '');
+
+            tbody.innerHTML = sortedItems.map((item, index) => {
+                const startTime = item.time || '--';
+                const nextIndex = (index + 1) % sortedItems.length;
+                const endTime = sortedItems[nextIndex].time || '--';
+
+                // Check if this is target window (compare without colon)
+                const isTarget = startTime.replace(':', '') === windowStartNorm;
+
+                const timeDisplay = isTarget ? `* ${startTime} - ${endTime}` : `${startTime} - ${endTime}`;
+                return `
+                    <tr class="${isTarget ? 'tou-target' : ''}">
+                        <td>${timeDisplay}</td>
+                        <td>${item.soc !== undefined ? item.soc + '%' : '--'}</td>
+                        <td>${item.power || '--'}</td>
+                        <td><span class="tou-status ${item.enableGridCharge ? 'on' : 'off'}">${item.enableGridCharge ? 'ON' : 'OFF'}</span></td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        function updateSchedulerButtons(isRunning) {
+            const startBtn = document.getElementById('startBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const status = document.getElementById('schedulerStatusLarge');
+
+            status.textContent = isRunning ? 'RUNNING' : 'STOPPED';
+            status.className = `scheduler-status ${isRunning ? 'running' : 'stopped'}`;
+            startBtn.disabled = isRunning;
+            stopBtn.disabled = !isRunning;
+            startBtn.style.opacity = isRunning ? '0.5' : '1';
+            stopBtn.style.opacity = isRunning ? '1' : '0.5';
+        }
+
+        async function refreshStatus() {
+            const indicator = document.getElementById('refreshIndicator');
+            indicator.className = 'refresh-indicator active';
+
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                const state = data.current_state;
+                const schedule = data.schedule;
+
+                // Update max power
+                maxPower = schedule.max_discharge_power || 10000;
+                document.getElementById('maxPowerDisplay').textContent = (maxPower / 1000).toFixed(0);
+
+                // SoC
+                const socText = state.soc !== null ? `${state.soc}%` : '--%';
+                document.getElementById('currentSoc').textContent = socText;
+                document.getElementById('socValue').textContent = socText;
+                document.getElementById('socBar').style.width = state.soc !== null ? `${state.soc}%` : '0%';
+
+                // Power gauge
+                updatePowerGauge(state.battery_power);
+
+                // Status
+                const forceStatus = document.getElementById('forceDischargeStatus');
+                forceStatus.textContent = state.force_discharge_active ? 'ACTIVE' : 'INACTIVE';
+                forceStatus.className = `value ${state.force_discharge_active ? 'active' : 'inactive'}`;
+
+                const inWindow = document.getElementById('inWindow');
+                inWindow.textContent = data.in_discharge_window ? 'YES' : 'NO';
+                inWindow.className = `value ${data.in_discharge_window ? 'active' : 'inactive'}`;
+
+                updateSchedulerButtons(state.scheduler_status === 'running');
+
+                // SoC markers
+                const reserve = schedule.min_soc_reserve || 20;
+                const cutoff = schedule.force_discharge_cutoff_soc || 50;
+                document.getElementById('reserveMarker').style.left = `${reserve}%`;
+                document.getElementById('cutoffMarker').style.left = `${cutoff}%`;
+                document.getElementById('reserveLabel').textContent = `${reserve}%`;
+                document.getElementById('cutoffLabel').textContent = `${cutoff}%`;
+
+                // Times
+                document.getElementById('lastCheck').textContent = formatTime(state.last_check);
+                document.getElementById('serverTime').textContent = formatTime(data.server_time);
+
+                // Error
+                const errorMsg = document.getElementById('errorMsg');
+                if (state.last_error) {
+                    errorMsg.textContent = `Error: ${state.last_error}`;
+                    errorMsg.style.display = 'block';
+                } else {
+                    errorMsg.style.display = 'none';
+                }
+
+                // Update form
+                document.getElementById('startTime').value = schedule.force_discharge_start || '17:30';
+                document.getElementById('endTime').value = schedule.force_discharge_end || '19:30';
+                document.getElementById('minSocReserve').value = schedule.min_soc_reserve || 20;
+                document.getElementById('cutoffSoc').value = schedule.force_discharge_cutoff_soc || 50;
+                document.getElementById('maxPowerInput').value = schedule.max_discharge_power || 10000;
+
+                // TOU table
+                updateTouTable(data.tou_settings, schedule.force_discharge_start || '17:30');
+
+            } catch (error) {
+                console.error('Error:', error);
+            }
+
+            indicator.className = 'refresh-indicator';
+        }
+
+        async function startScheduler() {
+            try {
+                const response = await fetch('/api/scheduler/start', { method: 'POST' });
+                const data = await response.json();
+                showToast(data.message);
+                refreshStatus();
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        async function stopScheduler() {
+            try {
+                const response = await fetch('/api/scheduler/stop', { method: 'POST' });
+                const data = await response.json();
+                showToast(data.message);
+                refreshStatus();
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const schedule = {
+                force_discharge_start: document.getElementById('startTime').value,
+                force_discharge_end: document.getElementById('endTime').value,
+                min_soc_reserve: parseInt(document.getElementById('minSocReserve').value),
+                force_discharge_cutoff_soc: parseInt(document.getElementById('cutoffSoc').value),
+                max_discharge_power: parseInt(document.getElementById('maxPowerInput').value)
+            };
+
+            try {
+                const response = await fetch('/api/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ schedule, update_tou: true })
+                });
+                const data = await response.json();
+                if (data.success) {
+                    showToast('Settings saved');
+                    refreshStatus();
+                } else {
+                    showToast(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        });
+
+        refreshStatus();
+        refreshInterval = setInterval(refreshStatus, 10000);
+    </script>
+</body>
+</html>

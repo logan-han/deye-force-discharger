@@ -1,0 +1,17 @@
+{
+  "deye": {
+    "api_base_url": "https://eu1-developer.deyecloud.com",
+    "app_id": "-snip-",
+    "app_secret": "-snip-",
+    "email": "-snip-",
+    "password": "-snip-",
+    "device_sn": "-snip-"
+  },
+  "schedule": {
+    "force_discharge_start": "17:30",
+    "force_discharge_end": "19:30",
+    "min_soc_reserve": 20,
+    "force_discharge_cutoff_soc": 50,
+    "max_discharge_power": 10000
+  }
+}

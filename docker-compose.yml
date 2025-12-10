@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  deye-force-discharger:
+    build: .
+    container_name: deye-force-discharger
+    restart: unless-stopped
+    ports:
+      - "7777:7777"
+    volumes:
+      # Mount config file for persistence
+      - ./config.json:/app/config.json
+    environment:
+      - TZ=Australia/Sydney
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:7777/api/status"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
