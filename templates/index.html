@@ -4,6 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Deye Force Discharger</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
@@ -273,6 +275,13 @@
 
         .error-msg { color: #e94560; font-size: 0.8rem; margin-top: 8px; }
         .status-footer { display: flex; justify-content: space-between; font-size: 0.7rem; color: #555; margin-top: 10px; }
+
+        /* SOC Trend Chart */
+        .chart-container {
+            position: relative;
+            height: 200px;
+            width: 100%;
+        }
     </style>
 </head>
 <body>
@@ -326,6 +335,17 @@
                     <span><div class="legend-dot reserve"></div> Reserve <span id="reserveLabel">20%</span></span>
                     <span><div class="legend-dot cutoff"></div> Cutoff <span id="cutoffLabel">50%</span></span>
                     <span><div class="legend-dot current"></div> Current</span>
+                </div>
+            </div>
+
+            <!-- SOC Trend Chart -->
+            <div class="gauge-section">
+                <div class="gauge-header">
+                    <span class="gauge-label">SOC Trend</span>
+                    <span class="gauge-value" id="chartDataPoints">0 points</span>
+                </div>
+                <div class="chart-container">
+                    <canvas id="socChart"></canvas>
                 </div>
             </div>
             <div id="errorMsg" class="error-msg" style="display: none;"></div>
@@ -418,6 +438,111 @@
         let refreshInterval;
         let maxPower = 10000;
         let isEditingSettings = false;
+        let socChart = null;
+
+        // Initialize SOC trend chart
+        function initSocChart() {
+            const ctx = document.getElementById('socChart').getContext('2d');
+            socChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: [{
+                        label: 'SOC %',
+                        data: [],
+                        borderColor: '#4ecca3',
+                        backgroundColor: 'rgba(78, 204, 163, 0.1)',
+                        borderWidth: 2,
+                        fill: true,
+                        tension: 0.3,
+                        pointRadius: 0,
+                        pointHoverRadius: 4
+                    }]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        mode: 'index',
+                        intersect: false
+                    },
+                    plugins: {
+                        legend: {
+                            display: false
+                        },
+                        tooltip: {
+                            backgroundColor: '#16213e',
+                            titleColor: '#4ecca3',
+                            bodyColor: '#eee',
+                            borderColor: '#2a3f5f',
+                            borderWidth: 1,
+                            callbacks: {
+                                title: function(items) {
+                                    return new Date(items[0].parsed.x).toLocaleTimeString();
+                                },
+                                label: function(item) {
+                                    return `SOC: ${item.parsed.y}%`;
+                                }
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                displayFormats: {
+                                    minute: 'HH:mm',
+                                    hour: 'HH:mm'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(42, 63, 95, 0.5)'
+                            },
+                            ticks: {
+                                color: '#888',
+                                font: { size: 10 },
+                                maxTicksLimit: 8
+                            }
+                        },
+                        y: {
+                            min: 0,
+                            max: 100,
+                            grid: {
+                                color: 'rgba(42, 63, 95, 0.5)'
+                            },
+                            ticks: {
+                                color: '#888',
+                                font: { size: 10 },
+                                callback: function(value) {
+                                    return value + '%';
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // Update SOC chart with history data
+        async function updateSocChart() {
+            try {
+                const response = await fetch('/api/soc-history?limit=360'); // Last ~3 hours
+                const data = await response.json();
+
+                if (data.success && socChart) {
+                    const chartData = data.history.map(item => ({
+                        x: new Date(item.timestamp),
+                        y: item.soc
+                    }));
+
+                    socChart.data.datasets[0].data = chartData;
+                    socChart.update('none'); // Update without animation for smoother refresh
+
+                    document.getElementById('chartDataPoints').textContent = `${data.count} points`;
+                }
+            } catch (error) {
+                console.error('Error fetching SOC history:', error);
+            }
+        }
 
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
@@ -588,6 +713,9 @@
                 // TOU table
                 updateTouTable(data.tou_settings, schedule.force_discharge_start || '17:30');
 
+                // Update SOC chart
+                updateSocChart();
+
             } catch (error) {
                 console.error('Error:', error);
             }
@@ -652,6 +780,8 @@
             input.addEventListener('blur', () => { isEditingSettings = false; });
         });
 
+        // Initialize chart and start refresh
+        initSocChart();
         refreshStatus();
         refreshInterval = setInterval(refreshStatus, 10000);
     </script>

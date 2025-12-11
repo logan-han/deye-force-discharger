@@ -35,6 +35,10 @@ current_state = {
     "scheduler_status": "stopped"
 }
 
+# In-memory SOC history (stores last 24 hours of data)
+SOC_HISTORY_MAX_POINTS = 2880  # 24 hours at 30-second intervals
+soc_history = []  # List of {"timestamp": ISO string, "soc": number, "power": number}
+
 
 def load_config():
     """Load configuration from file"""
@@ -132,9 +136,21 @@ def scheduler_loop():
             # Get current battery info
             battery_info = client.get_battery_info()
             soc = battery_info.get("soc")
+            power = battery_info.get("power")
             current_state["soc"] = soc
-            current_state["battery_power"] = battery_info.get("power")
+            current_state["battery_power"] = power
             current_state["last_check"] = datetime.now().isoformat()
+
+            # Record SOC history
+            if soc is not None:
+                soc_history.append({
+                    "timestamp": current_state["last_check"],
+                    "soc": soc,
+                    "power": power
+                })
+                # Trim history to max points
+                while len(soc_history) > SOC_HISTORY_MAX_POINTS:
+                    soc_history.pop(0)
 
             in_window = is_within_discharge_window()
 
@@ -401,6 +417,24 @@ def get_soc():
         return jsonify({"success": True, "soc": soc})
     except Exception as e:
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/soc-history')
+def get_soc_history():
+    """Get SOC history for charting"""
+    # Optional query param to limit number of points
+    limit = request.args.get('limit', type=int)
+
+    if limit and limit > 0:
+        data = soc_history[-limit:]
+    else:
+        data = soc_history
+
+    return jsonify({
+        "success": True,
+        "history": data,
+        "count": len(data)
+    })
 
 
 if __name__ == '__main__':
