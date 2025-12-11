@@ -144,65 +144,71 @@ class DeyeCloudClient:
         window_end: str,
         min_soc_reserve: int,
         window_soc: int,
-        power: int
+        power: int,
+        charge_window_start: str = None,
+        charge_window_end: str = None,
+        charge_target_soc: int = None
     ) -> Dict[str, Any]:
         """
-        Update TOU settings on inverter with 3 time periods
+        Update TOU settings on inverter with time periods for discharge and charge windows
 
         Args:
             window_start: Force discharge window start time (HH:MM)
             window_end: Force discharge window end time (HH:MM)
-            min_soc_reserve: SoC for periods outside the window
+            min_soc_reserve: SoC for periods outside the windows
             window_soc: SoC for the discharge window period
             power: Max discharge power in watts
+            charge_window_start: Force charge window start time (HH:MM), optional
+            charge_window_end: Force charge window end time (HH:MM), optional
+            charge_target_soc: Target SoC for force charge, optional
         """
-        logger.info(f"Setting TOU: window={window_start}-{window_end}, reserve_soc={min_soc_reserve}, window_soc={window_soc}, power={power}")
+        logger.info(f"Setting TOU: discharge={window_start}-{window_end} soc={window_soc}, "
+                   f"charge={charge_window_start}-{charge_window_end} target_soc={charge_target_soc}, "
+                   f"reserve_soc={min_soc_reserve}, power={power}")
+
+        # Build time periods dynamically
+        time_items = []
+
+        # Collect all time boundaries with their settings
+        # Each entry: (time, soc, enable_grid_charge)
+        time_boundaries = []
+
+        # Default periods (outside any window)
+        time_boundaries.append(("00:00", min_soc_reserve, False))
+
+        # Add charge window if configured
+        if charge_window_start and charge_window_end and charge_target_soc is not None:
+            time_boundaries.append((charge_window_start, charge_target_soc, True))
+            time_boundaries.append((charge_window_end, min_soc_reserve, False))
+
+        # Add discharge window
+        time_boundaries.append((window_start, window_soc, False))
+        time_boundaries.append((window_end, min_soc_reserve, False))
+
+        # Sort by time
+        time_boundaries.sort(key=lambda x: x[0])
+
+        # Remove duplicates (keep the last one for each time)
+        seen_times = {}
+        for time_str, soc, grid_charge in time_boundaries:
+            seen_times[time_str] = (soc, grid_charge)
+
+        # Create sorted list
+        sorted_times = sorted(seen_times.keys())
+
+        for time_str in sorted_times:
+            soc, grid_charge = seen_times[time_str]
+            time_items.append({
+                "enableGeneration": False,
+                "enableGridCharge": grid_charge,
+                "power": power,
+                "soc": soc,
+                "time": time_str
+            })
+
         payload = {
             "deviceSn": self.device_sn,
-            "timeUseSettingItems": [
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": min_soc_reserve,
-                    "time": "00:00"
-                },
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": min_soc_reserve,
-                    "time": "06:00"
-                },
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": min_soc_reserve,
-                    "time": "12:00"
-                },
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": window_soc,
-                    "time": window_start
-                },
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": min_soc_reserve,
-                    "time": window_end
-                },
-                {
-                    "enableGeneration": False,
-                    "enableGridCharge": False,
-                    "power": power,
-                    "soc": min_soc_reserve,
-                    "time": "23:00"
-                }
-            ]
+            "timeUseSettingItems": time_items
         }
         return self._make_request("POST", "/v1.0/order/sys/tou/update", payload)
 

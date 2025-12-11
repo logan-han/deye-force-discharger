@@ -30,6 +30,7 @@ current_state = {
     "soc": None,
     "battery_power": None,
     "force_discharge_active": False,
+    "force_charge_active": False,
     "last_check": None,
     "last_error": None,
     "scheduler_status": "stopped"
@@ -113,6 +114,85 @@ def is_within_discharge_window() -> bool:
     return start_time <= now <= end_time
 
 
+def is_within_charge_window() -> bool:
+    """Check if current time is within force charge window"""
+    schedule = config.get("schedule", {})
+    start_time_str = schedule.get("force_charge_start")
+    end_time_str = schedule.get("force_charge_end")
+
+    # If not configured, return False
+    if not start_time_str or not end_time_str:
+        return False
+
+    now = datetime.now()
+    start_parts = start_time_str.split(":")
+    end_parts = end_time_str.split(":")
+
+    start_time = now.replace(
+        hour=int(start_parts[0]),
+        minute=int(start_parts[1]),
+        second=0,
+        microsecond=0
+    )
+    end_time = now.replace(
+        hour=int(end_parts[0]),
+        minute=int(end_parts[1]),
+        second=0,
+        microsecond=0
+    )
+
+    # Handle overnight windows (e.g., 22:00 to 06:00)
+    if end_time <= start_time:
+        end_time += timedelta(days=1)
+        if now < start_time:
+            now += timedelta(days=1)
+
+    return start_time <= now <= end_time
+
+
+def update_tou_settings():
+    """Update TOU settings on inverter based on current state"""
+    schedule = config.get("schedule", {})
+
+    min_soc_reserve = schedule.get("min_soc_reserve", 20)
+    cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
+    max_power = schedule.get("max_discharge_power", 10000)
+    window_start = schedule.get("force_discharge_start", "17:30")
+    window_end = schedule.get("force_discharge_end", "19:30")
+
+    # Force charge settings
+    charge_start = schedule.get("force_charge_start")
+    charge_end = schedule.get("force_charge_end")
+    charge_target_soc = schedule.get("force_charge_target_soc")
+
+    # Determine discharge window SoC based on current state
+    if current_state.get("force_discharge_active"):
+        discharge_window_soc = cutoff_soc
+    else:
+        discharge_window_soc = min_soc_reserve
+
+    # Determine charge settings based on current state
+    if current_state.get("force_charge_active") and charge_start and charge_end and charge_target_soc:
+        active_charge_start = charge_start
+        active_charge_end = charge_end
+        active_charge_soc = charge_target_soc
+    else:
+        active_charge_start = None
+        active_charge_end = None
+        active_charge_soc = None
+
+    return client.set_tou_settings(
+        window_start=window_start,
+        window_end=window_end,
+        min_soc_reserve=min_soc_reserve,
+        window_soc=discharge_window_soc,
+        power=max_power,
+        charge_window_start=active_charge_start,
+        charge_window_end=active_charge_end,
+        charge_target_soc=active_charge_soc
+    )
+
+
 def scheduler_loop():
     """Main scheduler loop for automatic mode switching"""
     global current_state, scheduler_running
@@ -129,6 +209,9 @@ def scheduler_loop():
             cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
             max_power = schedule.get("max_discharge_power", 10000)
 
+            # Force charge settings
+            charge_target_soc = schedule.get("force_charge_target_soc")
+
             # Get current battery info
             battery_info = client.get_battery_info()
             soc = battery_info.get("soc")
@@ -136,13 +219,33 @@ def scheduler_loop():
             current_state["battery_power"] = battery_info.get("power")
             current_state["last_check"] = datetime.now().isoformat()
 
-            in_window = is_within_discharge_window()
+            # Check if features are enabled
+            discharge_enabled = schedule.get("force_discharge_enabled", True)
+            charge_enabled = schedule.get("force_charge_enabled", True)
 
-            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}")
+            in_discharge_window = is_within_discharge_window()
+            in_charge_window = is_within_charge_window()
+
+            logger.info(f"Check: discharge_enabled={discharge_enabled}, charge_enabled={charge_enabled}, "
+                       f"discharge_window={in_discharge_window}, charge_window={in_charge_window}, "
+                       f"soc={soc}, cutoff={cutoff_soc}, charge_target={charge_target_soc}, reserve={min_soc_reserve}")
 
             # Determine if we should be in force discharge mode
-            # Force discharge when: in window AND SoC above cutoff
-            should_force_discharge = in_window and (soc is None or soc > cutoff_soc)
+            # Force discharge when: enabled AND in window AND SoC above cutoff
+            should_force_discharge = (
+                discharge_enabled and
+                in_discharge_window and
+                (soc is None or soc > cutoff_soc)
+            )
+
+            # Determine if we should be in force charge mode
+            # Force charge when: enabled AND in window AND SoC below target (if target configured)
+            should_force_charge = (
+                charge_enabled and
+                in_charge_window and
+                charge_target_soc is not None and
+                (soc is None or soc < charge_target_soc)
+            )
 
             window_start = schedule.get("force_discharge_start", "17:30")
             window_end = schedule.get("force_discharge_end", "19:30")
@@ -158,6 +261,10 @@ def scheduler_loop():
             except Exception as e:
                 logger.warning(f"Could not fetch work mode: {e}")
 
+            # Track if TOU needs update
+            tou_needs_update = False
+
+            # Handle force discharge state changes
             if should_force_discharge and not current_state["force_discharge_active"]:
                 # Activate force discharge: SELLING_FIRST with cutoff SoC in window
                 logger.info(f"Activating force discharge (SoC: {soc}% -> {cutoff_soc}%)")
@@ -165,18 +272,8 @@ def scheduler_loop():
                 # Set work mode
                 mode_result = client.set_work_mode(MODE_FORCE_DISCHARGE)
                 if mode_result.get("success"):
-                    # Wait for command to complete before sending TOU
-                    time.sleep(5)
-                    # Set TOU with cutoff SoC during window
-                    tou_result = client.set_tou_settings(
-                        window_start=window_start,
-                        window_end=window_end,
-                        min_soc_reserve=min_soc_reserve,
-                        window_soc=cutoff_soc,
-                        power=max_power
-                    )
-                    if not tou_result.get("success"):
-                        logger.warning(f"TOU update failed: {tou_result.get('msg')}")
+                    current_state["force_discharge_active"] = True
+                    tou_needs_update = True
                     current_state["last_error"] = None
                 else:
                     current_state["last_error"] = mode_result.get("msg", "Unknown error")
@@ -184,28 +281,39 @@ def scheduler_loop():
 
             elif not should_force_discharge and current_state["force_discharge_active"]:
                 # Deactivate force discharge: ZERO_EXPORT_TO_CT with reserve SoC everywhere
-                reason = "time window ended" if not in_window else f"SoC reached cutoff ({cutoff_soc}%)"
+                reason = "time window ended" if not in_discharge_window else f"SoC reached cutoff ({cutoff_soc}%)"
                 logger.info(f"Deactivating force discharge ({reason})")
 
                 # Set work mode
                 mode_result = client.set_work_mode(MODE_NORMAL)
                 if mode_result.get("success"):
-                    # Wait for command to complete before sending TOU
-                    time.sleep(5)
-                    # Set TOU with reserve SoC for all periods
-                    tou_result = client.set_tou_settings(
-                        window_start=window_start,
-                        window_end=window_end,
-                        min_soc_reserve=min_soc_reserve,
-                        window_soc=min_soc_reserve,
-                        power=max_power
-                    )
-                    if not tou_result.get("success"):
-                        logger.warning(f"TOU update failed: {tou_result.get('msg')}")
+                    current_state["force_discharge_active"] = False
+                    tou_needs_update = True
                     current_state["last_error"] = None
                 else:
                     current_state["last_error"] = mode_result.get("msg", "Unknown error")
                     logger.error(f"Failed to set work mode: {mode_result}")
+
+            # Handle force charge state changes (no mode change needed, just TOU update)
+            if should_force_charge and not current_state["force_charge_active"]:
+                logger.info(f"Activating force charge (SoC: {soc}% -> {charge_target_soc}%)")
+                current_state["force_charge_active"] = True
+                tou_needs_update = True
+                current_state["last_error"] = None
+
+            elif not should_force_charge and current_state["force_charge_active"]:
+                reason = "time window ended" if not in_charge_window else f"SoC reached target ({charge_target_soc}%)"
+                logger.info(f"Deactivating force charge ({reason})")
+                current_state["force_charge_active"] = False
+                tou_needs_update = True
+                current_state["last_error"] = None
+
+            # Update TOU if state changed
+            if tou_needs_update:
+                time.sleep(5)  # Wait for mode change to complete
+                tou_result = update_tou_settings()
+                if not tou_result.get("success"):
+                    logger.warning(f"TOU update failed: {tou_result.get('msg')}")
 
         except Exception as e:
             logger.error(f"Scheduler error: {e}")
@@ -270,6 +378,7 @@ def get_status():
         "current_state": current_state,
         "schedule": schedule,
         "in_discharge_window": is_within_discharge_window(),
+        "in_charge_window": is_within_charge_window(),
         "server_time": datetime.now().isoformat(),
         "tou_settings": tou_settings
     })
@@ -337,11 +446,11 @@ def get_config():
 
 
 @app.route('/api/config', methods=['POST'])
-def update_config():
+def update_config_route():
     """Update configuration and sync TOU to inverter"""
     try:
         body = request.get_json()
-        update_tou = body.get("update_tou", False)
+        should_update_tou = body.get("update_tou", False)
 
         if "schedule" in body:
             config["schedule"] = body["schedule"]
@@ -349,27 +458,8 @@ def update_config():
         save_config()
 
         # If requested, update TOU settings on inverter
-        if update_tou:
-            schedule = config.get("schedule", {})
-            min_soc_reserve = schedule.get("min_soc_reserve", 20)
-            cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
-            max_power = schedule.get("max_discharge_power", 10000)
-            window_start = schedule.get("force_discharge_start", "17:30")
-            window_end = schedule.get("force_discharge_end", "19:30")
-
-            # Determine window SoC based on current state
-            if current_state.get("force_discharge_active"):
-                window_soc = cutoff_soc
-            else:
-                window_soc = min_soc_reserve
-
-            result = client.set_tou_settings(
-                window_start=window_start,
-                window_end=window_end,
-                min_soc_reserve=min_soc_reserve,
-                window_soc=window_soc,
-                power=max_power
-            )
+        if should_update_tou:
+            result = update_tou_settings()
             if not result.get("success"):
                 return jsonify({"success": False, "error": f"Failed to update TOU: {result.get('msg')}"})
 
