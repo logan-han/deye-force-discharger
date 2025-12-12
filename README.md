@@ -94,3 +94,9 @@ The web interface is available at `http://<server_ip>:7777`
 1. Register at [Deye Cloud Developer Portal](https://developer.deyecloud.com)
 2. Create an application to get your `app_id` and `app_secret`
 3. Find your device serial number in the Deye app or on the inverter
+
+## Android Widget 
+
+I've also created an Android app to show SoC & charge/discharge status in 1x1 widget. 
+
+Drop me an email if you want to be a tester. (logan_at_han.life)
