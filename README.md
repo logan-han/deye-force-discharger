@@ -97,6 +97,8 @@ The web interface is available at `http://<server_ip>:7777`
 
 ## Android Widget 
 
-I've also created an Android app to show SoC & charge/discharge status in 1x1 widget. 
+I've also created an Android app for this and some extra features like show SoC & charge/discharge status in 1x1 widget. 
+
+Worth consider if you don't have a place to host this. 
 
 Drop me an email if you want to be a tester. (logan_at_han.life)
