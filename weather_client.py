@@ -259,7 +259,7 @@ class WeatherClient:
         current = data.get("current", {})
         daily_list = data.get("daily", [])
 
-        for i, day in enumerate(daily_list[:8]):  # Up to 8 days
+        for i, day in enumerate(daily_list[:5]):  # Up to 5 days
             dt = datetime.fromtimestamp(day.get("dt", 0))
             weather_list = day.get("weather", [])
             weather = weather_list[0] if weather_list else {}
@@ -322,7 +322,7 @@ class WeatherClient:
         daily_forecasts = []
         today = datetime.now().strftime("%Y-%m-%d")
 
-        for i, (date_key, day_data) in enumerate(sorted(daily_data.items())[:8]):
+        for i, (date_key, day_data) in enumerate(sorted(daily_data.items())[:5]):
             dt = datetime.strptime(date_key, "%Y-%m-%d")
 
             # Get most common condition for the day
