@@ -457,3 +457,253 @@ class TestDeyeCloudClientEdgeCases:
 
         assert result["soc"] is None
         assert result["power"] is None
+
+
+class TestSetTouSettingsWithFreeEnergy:
+    """Tests for set_tou_settings with free energy window parameters"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = DeyeCloudClient(
+            api_base_url="https://test-api.deyecloud.com",
+            app_id="test_app_id",
+            app_secret="test_secret",
+            email="test@test.com",
+            password="test_password",
+            device_sn="TEST123456"
+        )
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_without_free_energy(self, mock_request):
+        """Test set_tou_settings without free energy params (backward compatible)"""
+        mock_request.return_value = {"success": True}
+
+        result = self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000
+        )
+
+        mock_request.assert_called_once()
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Should have 6 time periods
+        assert len(payload["timeUseSettingItems"]) == 6
+
+        # All should have enableGridCharge = False
+        for item in payload["timeUseSettingItems"]:
+            assert item["enableGridCharge"] is False
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_with_free_energy_enabled(self, mock_request):
+        """Test set_tou_settings with free energy params"""
+        mock_request.return_value = {"success": True}
+
+        result = self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000,
+            free_energy_start="11:00",
+            free_energy_end="14:00",
+            free_energy_soc=100
+        )
+
+        mock_request.assert_called_once()
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Should have 6 time periods with free energy
+        assert len(payload["timeUseSettingItems"]) == 6
+
+        # Find the free energy period (11:00)
+        free_energy_period = None
+        for item in payload["timeUseSettingItems"]:
+            if item["time"] == "11:00":
+                free_energy_period = item
+                break
+
+        assert free_energy_period is not None
+        assert free_energy_period["enableGridCharge"] is True
+        assert free_energy_period["soc"] == 100
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_free_energy_period_structure(self, mock_request):
+        """Test that free energy period has correct structure"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=5000,
+            free_energy_start="10:00",
+            free_energy_end="13:00",
+            free_energy_soc=90
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Find periods by time
+        periods_by_time = {item["time"]: item for item in payload["timeUseSettingItems"]}
+
+        # Free energy start period
+        assert periods_by_time["10:00"]["enableGridCharge"] is True
+        assert periods_by_time["10:00"]["soc"] == 90
+        assert periods_by_time["10:00"]["power"] == 5000
+        assert periods_by_time["10:00"]["enableGeneration"] is False
+
+        # Free energy end period (grid charge off)
+        assert periods_by_time["13:00"]["enableGridCharge"] is False
+        assert periods_by_time["13:00"]["soc"] == 20  # min_soc_reserve
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_with_none_free_energy_params(self, mock_request):
+        """Test set_tou_settings with explicit None free energy params"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000,
+            free_energy_start=None,
+            free_energy_end=None,
+            free_energy_soc=None
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Should use non-free-energy structure (all grid charge off)
+        for item in payload["timeUseSettingItems"]:
+            assert item["enableGridCharge"] is False
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_partial_free_energy_params(self, mock_request):
+        """Test that partial free energy params result in disabled free energy"""
+        mock_request.return_value = {"success": True}
+
+        # Only start time, missing end and soc
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000,
+            free_energy_start="11:00",
+            free_energy_end=None,
+            free_energy_soc=None
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Should use non-free-energy structure (all grid charge off)
+        for item in payload["timeUseSettingItems"]:
+            assert item["enableGridCharge"] is False
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_free_energy_custom_target_soc(self, mock_request):
+        """Test free energy with custom target SoC (e.g., 90% for battery longevity)"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000,
+            free_energy_start="11:00",
+            free_energy_end="14:00",
+            free_energy_soc=90  # 90% instead of 100%
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        # Find the free energy period
+        free_energy_period = next(
+            item for item in payload["timeUseSettingItems"]
+            if item["time"] == "11:00"
+        )
+
+        assert free_energy_period["soc"] == 90
+        assert free_energy_period["enableGridCharge"] is True
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_preserves_discharge_window_with_free_energy(self, mock_request):
+        """Test that discharge window settings are preserved with free energy"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=8000,
+            free_energy_start="11:00",
+            free_energy_end="14:00",
+            free_energy_soc=100
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+        periods_by_time = {item["time"]: item for item in payload["timeUseSettingItems"]}
+
+        # Discharge window should still be configured correctly
+        assert periods_by_time["17:30"]["soc"] == 50  # window_soc
+        assert periods_by_time["17:30"]["enableGridCharge"] is False
+        assert periods_by_time["19:30"]["soc"] == 20  # min_soc_reserve
+        assert periods_by_time["19:30"]["enableGridCharge"] is False
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_all_periods_have_correct_power(self, mock_request):
+        """Test that all periods have the same power setting"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=7500,
+            free_energy_start="11:00",
+            free_energy_end="14:00",
+            free_energy_soc=100
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        for item in payload["timeUseSettingItems"]:
+            assert item["power"] == 7500
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_set_tou_generation_disabled_everywhere(self, mock_request):
+        """Test that enableGeneration is False for all periods"""
+        mock_request.return_value = {"success": True}
+
+        self.client.set_tou_settings(
+            window_start="17:30",
+            window_end="19:30",
+            min_soc_reserve=20,
+            window_soc=50,
+            power=10000,
+            free_energy_start="11:00",
+            free_energy_end="14:00",
+            free_energy_soc=100
+        )
+
+        call_args = mock_request.call_args
+        payload = call_args[0][2]
+
+        for item in payload["timeUseSettingItems"]:
+            assert item["enableGeneration"] is False

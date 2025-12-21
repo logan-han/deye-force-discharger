@@ -31,8 +31,13 @@
         }
         .status-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            grid-template-columns: repeat(2, 1fr);
             gap: 10px;
+        }
+        @media (min-width: 500px) {
+            .status-grid {
+                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            }
         }
         .status-item {
             background: #1a1a2e;
@@ -464,6 +469,10 @@
                     <div class="label">Weather Skip</div>
                     <div class="value" id="weatherSkipStatus">--</div>
                 </div>
+                <div class="status-item" id="freeEnergyItem" style="display: none;">
+                    <div class="label">Free Energy</div>
+                    <div class="value" id="freeEnergyStatus">--</div>
+                </div>
             </div>
 
             <!-- Power Gauge -->
@@ -566,6 +575,43 @@
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary btn-sm">Save Weather Settings</button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Free Energy Window -->
+        <div class="card" id="freeEnergyCard">
+            <h2>
+                Free Energy Window
+                <span class="weather-settings-toggle" onclick="toggleFreeEnergySettings()">Settings</span>
+            </h2>
+            <div id="freeEnergyContent">
+                <div class="weather-disabled">Loading free energy settings...</div>
+            </div>
+            <div class="weather-settings" id="freeEnergySettings">
+                <form id="freeEnergySettingsForm">
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="freeEnergyEnabled"> Enable Free Energy Window
+                            </label>
+                        </div>
+                    </div>
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>Start Time</label>
+                            <input type="time" id="freeEnergyStart" value="11:00">
+                        </div>
+                        <div class="setting-item">
+                            <label>End Time</label>
+                            <input type="time" id="freeEnergyEnd" value="14:00">
+                        </div>
+                        <div class="setting-item">
+                            <label>Target SoC (%)</label>
+                            <input type="number" id="freeEnergyTargetSoc" min="50" max="100" value="100">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm">Save & Update Inverter</button>
                 </form>
             </div>
         </div>
@@ -787,6 +833,22 @@
                     }
                 } else {
                     weatherSkipItem.style.display = 'none';
+                }
+
+                // Free energy status
+                const freeEnergyItem = document.getElementById('freeEnergyItem');
+                const freeEnergyStatusEl = document.getElementById('freeEnergyStatus');
+                if (data.free_energy && data.free_energy.enabled) {
+                    freeEnergyItem.style.display = 'block';
+                    if (data.in_free_energy_window) {
+                        freeEnergyStatusEl.textContent = 'ACTIVE';
+                        freeEnergyStatusEl.className = 'value active';
+                    } else {
+                        freeEnergyStatusEl.textContent = 'OFF';
+                        freeEnergyStatusEl.className = 'value inactive';
+                    }
+                } else {
+                    freeEnergyItem.style.display = 'none';
                 }
 
                 updateSchedulerButtons(state.scheduler_status === 'running');
@@ -1078,6 +1140,124 @@
         refreshWeather();
         // Refresh weather every 5 minutes
         setInterval(refreshWeather, 300000);
+
+        // Free Energy functionality
+        function renderFreeEnergyContent(data) {
+            const container = document.getElementById('freeEnergyContent');
+
+            if (!data.enabled) {
+                container.innerHTML = `
+                    <div class="weather-disabled">
+                        Free Energy Window is disabled.<br>
+                        <small>Enable this if your power company offers free energy during certain hours.</small>
+                    </div>
+                `;
+                return;
+            }
+
+            // Show current settings and status
+            const startTime = data.start_time || '11:00';
+            const endTime = data.end_time || '14:00';
+            const targetSoc = data.target_soc || 100;
+            const isActive = data.active;
+
+            let bannerHtml = '';
+            if (isActive) {
+                bannerHtml = `
+                    <div class="weather-skip-banner inactive">
+                        <span class="weather-skip-icon">⚡</span>
+                        <div class="weather-skip-text">
+                            <div class="title" style="color: #4ecca3;">Grid Charging Active</div>
+                            <div class="reason">Charging battery to ${targetSoc}% from free grid energy</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                bannerHtml = `
+                    <div class="weather-skip-banner" style="background: rgba(78, 204, 163, 0.1); border-color: #2a3f5f;">
+                        <span class="weather-skip-icon">⏰</span>
+                        <div class="weather-skip-text">
+                            <div class="title" style="color: #888;">Waiting for Free Energy Window</div>
+                            <div class="reason">Grid charging: ${startTime} - ${endTime} (Target: ${targetSoc}% SoC)</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            container.innerHTML = bannerHtml;
+        }
+
+        async function loadFreeEnergyConfig() {
+            try {
+                const response = await fetch('/api/free-energy/config');
+                const config = await response.json();
+
+                document.getElementById('freeEnergyEnabled').checked = config.enabled;
+                document.getElementById('freeEnergyStart').value = config.start_time || '11:00';
+                document.getElementById('freeEnergyEnd').value = config.end_time || '14:00';
+                document.getElementById('freeEnergyTargetSoc').value = config.target_soc || 100;
+            } catch (error) {
+                console.error('Error loading free energy config:', error);
+            }
+        }
+
+        function toggleFreeEnergySettings() {
+            const settings = document.getElementById('freeEnergySettings');
+            settings.classList.toggle('show');
+            if (settings.classList.contains('show')) {
+                loadFreeEnergyConfig();
+            }
+        }
+
+        async function refreshFreeEnergy() {
+            try {
+                const response = await fetch('/api/status');
+                const data = await response.json();
+                if (data.free_energy) {
+                    renderFreeEnergyContent(data.free_energy);
+                }
+            } catch (error) {
+                console.error('Free energy fetch error:', error);
+                document.getElementById('freeEnergyContent').innerHTML = `
+                    <div class="weather-disabled">Error loading free energy data</div>
+                `;
+            }
+        }
+
+        document.getElementById('freeEnergySettingsForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const payload = {
+                enabled: document.getElementById('freeEnergyEnabled').checked,
+                start_time: document.getElementById('freeEnergyStart').value,
+                end_time: document.getElementById('freeEnergyEnd').value,
+                target_soc: parseInt(document.getElementById('freeEnergyTargetSoc').value) || 100,
+                update_tou: true
+            };
+
+            try {
+                const response = await fetch('/api/free-energy/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Free energy settings saved');
+                    toggleFreeEnergySettings();
+                    refreshFreeEnergy();
+                    refreshStatus();
+                } else {
+                    showToast(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        });
+
+        // Initial free energy load
+        refreshFreeEnergy();
     </script>
 </body>
 </html>

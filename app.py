@@ -37,7 +37,8 @@ current_state = {
     "last_error": None,
     "scheduler_status": "stopped",
     "weather_skip_active": False,
-    "weather_skip_reason": None
+    "weather_skip_reason": None,
+    "free_energy_active": False
 }
 weather_forecast_cache = {
     "forecast": None,
@@ -208,6 +209,56 @@ def is_within_discharge_window() -> bool:
     return start_time <= now <= end_time
 
 
+def is_within_free_energy_window() -> bool:
+    """Check if current time is within free energy window"""
+    free_energy = config.get("free_energy", {})
+
+    if not free_energy.get("enabled", False):
+        return False
+
+    start_time_str = free_energy.get("start_time", "11:00")
+    end_time_str = free_energy.get("end_time", "14:00")
+
+    now = datetime.now()
+    start_parts = start_time_str.split(":")
+    end_parts = end_time_str.split(":")
+
+    start_time = now.replace(
+        hour=int(start_parts[0]),
+        minute=int(start_parts[1]),
+        second=0,
+        microsecond=0
+    )
+    end_time = now.replace(
+        hour=int(end_parts[0]),
+        minute=int(end_parts[1]),
+        second=0,
+        microsecond=0
+    )
+
+    # Handle overnight windows
+    if end_time <= start_time:
+        end_time += timedelta(days=1)
+        if now < start_time:
+            now += timedelta(days=1)
+
+    return start_time <= now <= end_time
+
+
+def get_free_energy_tou_params():
+    """Get free energy TOU parameters if enabled"""
+    free_energy = config.get("free_energy", {})
+
+    if not free_energy.get("enabled", False):
+        return None, None, None
+
+    return (
+        free_energy.get("start_time", "11:00"),
+        free_energy.get("end_time", "14:00"),
+        free_energy.get("target_soc", 100)
+    )
+
+
 def scheduler_loop():
     """Main scheduler loop for automatic mode switching"""
     global current_state, scheduler_running
@@ -232,13 +283,18 @@ def scheduler_loop():
             current_state["last_check"] = datetime.now().isoformat()
 
             in_window = is_within_discharge_window()
+            in_free_energy_window = is_within_free_energy_window()
+            current_state["free_energy_active"] = in_free_energy_window
 
             # Check weather forecast for skip condition
             weather_skip, weather_reason = should_skip_discharge_for_weather()
             current_state["weather_skip_active"] = weather_skip
             current_state["weather_skip_reason"] = weather_reason
 
-            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}")
+            # Get free energy TOU params
+            free_energy_start, free_energy_end, free_energy_soc = get_free_energy_tou_params()
+
+            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}, free_energy={in_free_energy_window}")
 
             # Determine if we should be in force discharge mode
             # Force discharge when: in window AND SoC above cutoff AND NOT weather skip
@@ -276,7 +332,10 @@ def scheduler_loop():
                         window_end=window_end,
                         min_soc_reserve=min_soc_reserve,
                         window_soc=cutoff_soc,
-                        power=max_power
+                        power=max_power,
+                        free_energy_start=free_energy_start,
+                        free_energy_end=free_energy_end,
+                        free_energy_soc=free_energy_soc
                     )
                     if not tou_result.get("success"):
                         logger.warning(f"TOU update failed: {tou_result.get('msg')}")
@@ -301,7 +360,10 @@ def scheduler_loop():
                         window_end=window_end,
                         min_soc_reserve=min_soc_reserve,
                         window_soc=min_soc_reserve,
-                        power=max_power
+                        power=max_power,
+                        free_energy_start=free_energy_start,
+                        free_energy_end=free_energy_end,
+                        free_energy_soc=free_energy_soc
                     )
                     if not tou_result.get("success"):
                         logger.warning(f"TOU update failed: {tou_result.get('msg')}")
@@ -378,13 +440,25 @@ def get_status():
         "threshold_days": weather_config.get("bad_weather_threshold_days", 2)
     }
 
+    # Include free energy status
+    free_energy_config = config.get("free_energy", {})
+    free_energy_status = {
+        "enabled": free_energy_config.get("enabled", False),
+        "active": current_state.get("free_energy_active", False),
+        "start_time": free_energy_config.get("start_time", "11:00"),
+        "end_time": free_energy_config.get("end_time", "14:00"),
+        "target_soc": free_energy_config.get("target_soc", 100)
+    }
+
     return jsonify({
         "current_state": current_state,
         "schedule": schedule,
         "in_discharge_window": is_within_discharge_window(),
+        "in_free_energy_window": is_within_free_energy_window(),
         "server_time": datetime.now().isoformat(),
         "tou_settings": tou_settings,
-        "weather": weather_status
+        "weather": weather_status,
+        "free_energy": free_energy_status
     })
 
 
@@ -476,12 +550,18 @@ def update_config():
             else:
                 window_soc = min_soc_reserve
 
+            # Get free energy TOU params
+            free_energy_start, free_energy_end, free_energy_soc = get_free_energy_tou_params()
+
             result = client.set_tou_settings(
                 window_start=window_start,
                 window_end=window_end,
                 min_soc_reserve=min_soc_reserve,
                 window_soc=window_soc,
-                power=max_power
+                power=max_power,
+                free_energy_start=free_energy_start,
+                free_energy_end=free_energy_end,
+                free_energy_soc=free_energy_soc
             )
             if not result.get("success"):
                 return jsonify({"success": False, "error": f"Failed to update TOU: {result.get('msg')}"})
@@ -606,6 +686,75 @@ def update_weather_config():
         weather_forecast_cache["forecast"] = None
         weather_forecast_cache["last_update"] = None
         init_weather_client()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@app.route('/api/free-energy/config')
+def get_free_energy_config():
+    """Get free energy configuration"""
+    free_energy_config = config.get("free_energy", {})
+    return jsonify({
+        "enabled": free_energy_config.get("enabled", False),
+        "start_time": free_energy_config.get("start_time", "11:00"),
+        "end_time": free_energy_config.get("end_time", "14:00"),
+        "target_soc": free_energy_config.get("target_soc", 100)
+    })
+
+
+@app.route('/api/free-energy/config', methods=['POST'])
+def update_free_energy_config():
+    """Update free energy configuration"""
+    try:
+        body = request.get_json()
+
+        if "free_energy" not in config:
+            config["free_energy"] = {}
+
+        # Update allowed fields
+        if "enabled" in body:
+            config["free_energy"]["enabled"] = body["enabled"]
+        if "start_time" in body:
+            config["free_energy"]["start_time"] = body["start_time"]
+        if "end_time" in body:
+            config["free_energy"]["end_time"] = body["end_time"]
+        if "target_soc" in body:
+            config["free_energy"]["target_soc"] = body["target_soc"]
+
+        save_config()
+
+        # If update_tou is requested, sync TOU to inverter with new settings
+        if body.get("update_tou", False):
+            schedule = config.get("schedule", {})
+            min_soc_reserve = schedule.get("min_soc_reserve", 20)
+            cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
+            max_power = schedule.get("max_discharge_power", 10000)
+            window_start = schedule.get("force_discharge_start", "17:30")
+            window_end = schedule.get("force_discharge_end", "19:30")
+
+            # Determine window SoC based on current state
+            if current_state.get("force_discharge_active"):
+                window_soc = cutoff_soc
+            else:
+                window_soc = min_soc_reserve
+
+            # Get free energy TOU params (now with new config)
+            free_energy_start, free_energy_end, free_energy_soc = get_free_energy_tou_params()
+
+            result = client.set_tou_settings(
+                window_start=window_start,
+                window_end=window_end,
+                min_soc_reserve=min_soc_reserve,
+                window_soc=window_soc,
+                power=max_power,
+                free_energy_start=free_energy_start,
+                free_energy_end=free_energy_end,
+                free_energy_soc=free_energy_soc
+            )
+            if not result.get("success"):
+                return jsonify({"success": False, "error": f"Failed to update TOU: {result.get('msg')}"})
 
         return jsonify({"success": True})
     except Exception as e:

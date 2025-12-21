@@ -144,10 +144,13 @@ class DeyeCloudClient:
         window_end: str,
         min_soc_reserve: int,
         window_soc: int,
-        power: int
+        power: int,
+        free_energy_start: Optional[str] = None,
+        free_energy_end: Optional[str] = None,
+        free_energy_soc: Optional[int] = None
     ) -> Dict[str, Any]:
         """
-        Update TOU settings on inverter with 3 time periods
+        Update TOU settings on inverter with time periods
 
         Args:
             window_start: Force discharge window start time (HH:MM)
@@ -155,11 +158,76 @@ class DeyeCloudClient:
             min_soc_reserve: SoC for periods outside the window
             window_soc: SoC for the discharge window period
             power: Max discharge power in watts
+            free_energy_start: Optional free energy window start time (HH:MM)
+            free_energy_end: Optional free energy window end time (HH:MM)
+            free_energy_soc: Optional target SoC for grid charging during free energy window
         """
-        logger.info(f"Setting TOU: window={window_start}-{window_end}, reserve_soc={min_soc_reserve}, window_soc={window_soc}, power={power}")
-        payload = {
-            "deviceSn": self.device_sn,
-            "timeUseSettingItems": [
+        # Build time periods based on whether free energy window is enabled
+        free_energy_enabled = all([free_energy_start, free_energy_end, free_energy_soc is not None])
+
+        if free_energy_enabled:
+            logger.info(f"Setting TOU: window={window_start}-{window_end}, reserve_soc={min_soc_reserve}, "
+                       f"window_soc={window_soc}, power={power}, "
+                       f"free_energy={free_energy_start}-{free_energy_end} (soc={free_energy_soc})")
+        else:
+            logger.info(f"Setting TOU: window={window_start}-{window_end}, reserve_soc={min_soc_reserve}, "
+                       f"window_soc={window_soc}, power={power}")
+
+        # Start building time periods
+        time_items = []
+
+        if free_energy_enabled:
+            # With free energy window: need to interleave the periods properly
+            # We'll create periods: 00:00, free_energy_start, free_energy_end, window_start, window_end, 23:00
+            # Note: Some periods may be skipped if they overlap
+
+            time_items = [
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": False,
+                    "power": power,
+                    "soc": min_soc_reserve,
+                    "time": "00:00"
+                },
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": True,
+                    "power": power,
+                    "soc": free_energy_soc,
+                    "time": free_energy_start
+                },
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": False,
+                    "power": power,
+                    "soc": min_soc_reserve,
+                    "time": free_energy_end
+                },
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": False,
+                    "power": power,
+                    "soc": window_soc,
+                    "time": window_start
+                },
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": False,
+                    "power": power,
+                    "soc": min_soc_reserve,
+                    "time": window_end
+                },
+                {
+                    "enableGeneration": False,
+                    "enableGridCharge": False,
+                    "power": power,
+                    "soc": min_soc_reserve,
+                    "time": "23:00"
+                }
+            ]
+        else:
+            # Original behavior without free energy window
+            time_items = [
                 {
                     "enableGeneration": False,
                     "enableGridCharge": False,
@@ -203,6 +271,10 @@ class DeyeCloudClient:
                     "time": "23:00"
                 }
             ]
+
+        payload = {
+            "deviceSn": self.device_sn,
+            "timeUseSettingItems": time_items
         }
         return self._make_request("POST", "/v1.0/order/sys/tou/update", payload)
 

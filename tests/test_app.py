@@ -1395,3 +1395,685 @@ class TestSchedulerLoop:
 
             # Should have deactivated force discharge
             mock_client.set_work_mode.assert_called_with("ZERO_EXPORT_TO_CT")
+
+
+class TestIsWithinFreeEnergyWindow:
+    """Tests for is_within_free_energy_window function"""
+
+    @patch('app.datetime')
+    def test_disabled_returns_false(self, mock_datetime):
+        """Test returns False when feature is disabled"""
+        mock_datetime.now.return_value = datetime(2023, 12, 22, 12, 0, 0)
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": False,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is False
+
+    @patch('app.datetime')
+    def test_within_window(self, mock_datetime):
+        """Test detection when within free energy window"""
+        mock_now = datetime(2023, 12, 22, 12, 30, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_before_window(self, mock_datetime):
+        """Test detection when before free energy window"""
+        mock_now = datetime(2023, 12, 22, 10, 0, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is False
+
+    @patch('app.datetime')
+    def test_after_window(self, mock_datetime):
+        """Test detection when after free energy window"""
+        mock_now = datetime(2023, 12, 22, 15, 0, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is False
+
+    @patch('app.datetime')
+    def test_at_start_boundary(self, mock_datetime):
+        """Test detection at exact start time"""
+        mock_now = datetime(2023, 12, 22, 11, 0, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_at_end_boundary(self, mock_datetime):
+        """Test detection at exact end time"""
+        mock_now = datetime(2023, 12, 22, 14, 0, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_missing_config(self, mock_datetime):
+        """Test returns False when config is missing"""
+        mock_datetime.now.return_value = datetime(2023, 12, 22, 12, 0, 0)
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {}
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is False
+
+    @patch('app.datetime')
+    def test_overnight_window_before_midnight(self, mock_datetime):
+        """Test overnight free energy window when time is before midnight"""
+        mock_now = datetime(2023, 12, 22, 23, 30, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "23:00",
+                    "end_time": "05:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_overnight_window_after_midnight(self, mock_datetime):
+        """Test overnight free energy window when time is after midnight"""
+        mock_now = datetime(2023, 12, 23, 2, 0, 0)
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "23:00",
+                    "end_time": "05:00"
+                }
+            }
+
+            result = app_module.is_within_free_energy_window()
+
+            assert result is True
+
+
+class TestGetFreeEnergyTouParams:
+    """Tests for get_free_energy_tou_params function"""
+
+    def test_disabled_returns_none(self):
+        """Test returns None values when disabled"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": False,
+                    "start_time": "11:00",
+                    "end_time": "14:00",
+                    "target_soc": 100
+                }
+            }
+
+            start, end, soc = app_module.get_free_energy_tou_params()
+
+            assert start is None
+            assert end is None
+            assert soc is None
+
+    def test_enabled_returns_values(self):
+        """Test returns config values when enabled"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00",
+                    "target_soc": 90
+                }
+            }
+
+            start, end, soc = app_module.get_free_energy_tou_params()
+
+            assert start == "11:00"
+            assert end == "14:00"
+            assert soc == 90
+
+    def test_missing_config_returns_none(self):
+        """Test returns None when config is missing"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {}
+
+            start, end, soc = app_module.get_free_energy_tou_params()
+
+            assert start is None
+            assert end is None
+            assert soc is None
+
+    def test_uses_defaults(self):
+        """Test uses default values when not specified"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "free_energy": {
+                    "enabled": True
+                }
+            }
+
+            start, end, soc = app_module.get_free_energy_tou_params()
+
+            assert start == "11:00"
+            assert end == "14:00"
+            assert soc == 100
+
+
+class TestFreeEnergyConfigAPI:
+    """Tests for free energy configuration API endpoints"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_instance.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_instance.get_tou_settings.return_value = {"success": True, "timeUseSettingItems": []}
+            mock_instance.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {"device_sn": "TEST123"},
+                "schedule": {
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30",
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000
+                },
+                "weather": {"enabled": False},
+                "free_energy": {
+                    "enabled": False,
+                    "start_time": "11:00",
+                    "end_time": "14:00",
+                    "target_soc": 100
+                }
+            }
+            app_module.client = mock_instance
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "free_energy_active": False
+            }
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module, mock_instance
+
+    def test_get_free_energy_config(self, test_client):
+        """Test GET /api/free-energy/config returns config"""
+        client, app_module, _ = test_client
+
+        response = client.get('/api/free-energy/config')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["enabled"] is False
+        assert data["start_time"] == "11:00"
+        assert data["end_time"] == "14:00"
+        assert data["target_soc"] == 100
+
+    def test_get_free_energy_config_defaults(self, test_client):
+        """Test GET /api/free-energy/config returns defaults when missing"""
+        client, app_module, _ = test_client
+        app_module.config["free_energy"] = {}
+
+        response = client.get('/api/free-energy/config')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["enabled"] is False
+        assert data["start_time"] == "11:00"
+        assert data["end_time"] == "14:00"
+        assert data["target_soc"] == 100
+
+    @patch('app.save_config')
+    def test_update_free_energy_config(self, mock_save, test_client):
+        """Test POST /api/free-energy/config updates config"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/free-energy/config',
+            data=json.dumps({
+                "enabled": True,
+                "start_time": "10:00",
+                "end_time": "13:00",
+                "target_soc": 90
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        mock_save.assert_called_once()
+        assert app_module.config["free_energy"]["enabled"] is True
+        assert app_module.config["free_energy"]["start_time"] == "10:00"
+        assert app_module.config["free_energy"]["end_time"] == "13:00"
+        assert app_module.config["free_energy"]["target_soc"] == 90
+
+    @patch('app.save_config')
+    def test_update_free_energy_config_with_tou(self, mock_save, test_client):
+        """Test POST /api/free-energy/config with TOU update"""
+        client, app_module, mock_deye = test_client
+
+        response = client.post('/api/free-energy/config',
+            data=json.dumps({
+                "enabled": True,
+                "start_time": "11:00",
+                "end_time": "14:00",
+                "target_soc": 100,
+                "update_tou": True
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        mock_deye.set_tou_settings.assert_called_once()
+
+    @patch('app.save_config')
+    def test_update_free_energy_config_tou_failure(self, mock_save, test_client):
+        """Test POST /api/free-energy/config handles TOU failure"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_tou_settings.return_value = {"success": False, "msg": "TOU error"}
+
+        response = client.post('/api/free-energy/config',
+            data=json.dumps({
+                "enabled": True,
+                "update_tou": True
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "TOU" in data["error"]
+
+    def test_update_free_energy_config_exception(self, test_client):
+        """Test POST /api/free-energy/config handles exceptions"""
+        client, app_module, _ = test_client
+
+        with patch('app.save_config', side_effect=Exception("File error")):
+            response = client.post('/api/free-energy/config',
+                data=json.dumps({"enabled": True}),
+                content_type='application/json'
+            )
+            data = json.loads(response.data)
+
+            assert response.status_code == 500
+            assert data["success"] is False
+
+    @patch('app.save_config')
+    def test_update_free_energy_partial_config(self, mock_save, test_client):
+        """Test POST /api/free-energy/config with partial update"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/free-energy/config',
+            data=json.dumps({
+                "enabled": True
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["free_energy"]["enabled"] is True
+        # Other values should remain unchanged
+        assert app_module.config["free_energy"]["start_time"] == "11:00"
+
+
+class TestStatusIncludesFreeEnergy:
+    """Tests for /api/status including free energy info"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_instance.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_instance.get_tou_settings.return_value = {"success": True, "timeUseSettingItems": []}
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {"device_sn": "TEST123"},
+                "schedule": {
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30",
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000
+                },
+                "weather": {"enabled": False},
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00",
+                    "target_soc": 90
+                }
+            }
+            app_module.client = mock_instance
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "soc": 75,
+                "battery_power": 1000,
+                "force_discharge_active": False,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None,
+                "free_energy_active": False
+            }
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    def test_status_includes_free_energy(self, test_client):
+        """Test /api/status includes free_energy section"""
+        client, app_module = test_client
+
+        response = client.get('/api/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert "free_energy" in data
+        assert data["free_energy"]["enabled"] is True
+        assert data["free_energy"]["start_time"] == "11:00"
+        assert data["free_energy"]["end_time"] == "14:00"
+        assert data["free_energy"]["target_soc"] == 90
+
+    def test_status_includes_free_energy_window_status(self, test_client):
+        """Test /api/status includes in_free_energy_window"""
+        client, app_module = test_client
+
+        response = client.get('/api/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert "in_free_energy_window" in data
+
+    @patch('app.is_within_free_energy_window')
+    def test_status_free_energy_active_in_window(self, mock_window, test_client):
+        """Test status shows active when in free energy window"""
+        mock_window.return_value = True
+        client, app_module = test_client
+        app_module.current_state["free_energy_active"] = True
+
+        response = client.get('/api/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["free_energy"]["active"] is True
+
+
+class TestSchedulerFreeEnergyIntegration:
+    """Tests for scheduler integration with free energy feature"""
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.is_within_free_energy_window')
+    @patch('app.should_skip_discharge_for_weather')
+    @patch('app.get_free_energy_tou_params')
+    def test_scheduler_updates_free_energy_state(self, mock_params, mock_weather, mock_free_window, mock_window, mock_sleep):
+        """Test scheduler updates free_energy_active state"""
+        mock_window.return_value = False
+        mock_free_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+        mock_params.return_value = ("11:00", "14:00", 100)
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": -2000}  # Charging
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                },
+                "free_energy": {
+                    "enabled": True,
+                    "start_time": "11:00",
+                    "end_time": "14:00",
+                    "target_soc": 100
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "free_energy_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            assert app_module.current_state["free_energy_active"] is True
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.is_within_free_energy_window')
+    @patch('app.should_skip_discharge_for_weather')
+    @patch('app.get_free_energy_tou_params')
+    def test_scheduler_passes_free_energy_to_tou(self, mock_params, mock_weather, mock_free_window, mock_window, mock_sleep):
+        """Test scheduler passes free energy params to TOU settings"""
+        mock_window.return_value = True
+        mock_free_window.return_value = False
+        mock_weather.return_value = (False, "Good weather")
+        mock_params.return_value = ("11:00", "14:00", 90)
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "free_energy_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Check that set_tou_settings was called with free energy params
+            call_args = mock_client.set_tou_settings.call_args
+            assert call_args is not None
+            assert call_args.kwargs.get("free_energy_start") == "11:00"
+            assert call_args.kwargs.get("free_energy_end") == "14:00"
+            assert call_args.kwargs.get("free_energy_soc") == 90
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.is_within_free_energy_window')
+    @patch('app.should_skip_discharge_for_weather')
+    @patch('app.get_free_energy_tou_params')
+    def test_scheduler_free_energy_disabled(self, mock_params, mock_weather, mock_free_window, mock_window, mock_sleep):
+        """Test scheduler handles disabled free energy"""
+        mock_window.return_value = True
+        mock_free_window.return_value = False
+        mock_weather.return_value = (False, "Good weather")
+        mock_params.return_value = (None, None, None)  # Disabled
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "free_energy_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Check that set_tou_settings was called with None for free energy params
+            call_args = mock_client.set_tou_settings.call_args
+            assert call_args is not None
+            assert call_args.kwargs.get("free_energy_start") is None
+            assert call_args.kwargs.get("free_energy_end") is None
+            assert call_args.kwargs.get("free_energy_soc") is None
