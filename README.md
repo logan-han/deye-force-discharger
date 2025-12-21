@@ -17,17 +17,29 @@ When running in "Zero Export to CT" mode, the inverter does not allow force batt
 
 ## How It Works
 
-The scheduler monitors the current time and battery SoC, controlling both the work mode and TOU settings:
+The scheduler monitors the current time, battery SoC, and weather forecast, controlling both the work mode and TOU settings:
 
-1. **Within discharge window** (e.g., 17:30-19:30) **and SoC above cutoff**:
+1. **Within discharge window** (e.g., 17:30-19:30) **and SoC above cutoff** **and good weather forecast**:
    - Switches to `SELLING_FIRST` mode
    - Sets TOU window SoC to the cutoff value (e.g., 50%)
    - Battery discharges to grid until cutoff is reached
 
-2. **Outside window or SoC at/below cutoff**:
+2. **Outside window or SoC at/below cutoff or bad weather forecast**:
    - Switches to `ZERO_EXPORT_TO_CT` mode
    - Sets TOU SoC to reserve value (e.g., 20%) for all periods
    - Normal zero-export operation resumes
+
+## Weather-Based Discharge Skip
+
+The system can automatically skip battery discharge when bad weather is forecasted. This helps preserve battery charge for cloudy/rainy days when solar generation will be insufficient.
+
+**Why this matters:** During consecutive bad weather days, solar panels won't generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
+
+**How it works:**
+- Fetches 7-day weather forecast from OpenWeatherMap
+- Analyzes conditions: rain, thunderstorms, drizzle, snow, high cloud cover (>70%)
+- If bad weather is expected for X consecutive days (configurable, default 2), discharge is skipped
+- Displayed in the web UI with forecast cards showing good/bad days
 
 ## Requirements
 
@@ -55,6 +67,15 @@ Edit `config.json` with your credentials and preferences:
     "min_soc_reserve": 20,
     "force_discharge_cutoff_soc": 50,
     "max_discharge_power": 10000
+  },
+  "weather": {
+    "enabled": true,
+    "api_key": "YOUR_OPENWEATHERMAP_API_KEY",
+    "latitude": -33.8688,
+    "longitude": 151.2093,
+    "bad_weather_threshold_days": 2,
+    "bad_weather_conditions": ["Rain", "Thunderstorm", "Drizzle", "Snow"],
+    "min_cloud_cover_percent": 70
   }
 }
 ```
@@ -74,6 +95,18 @@ Edit `config.json` with your credentials and preferences:
 | `min_soc_reserve` | Minimum battery SoC reserve (used outside discharge window) |
 | `force_discharge_cutoff_soc` | SoC at which to stop force discharge (e.g., 50%) |
 | `max_discharge_power` | Maximum discharge power in watts (e.g., 10000) |
+
+### Weather Configuration (Optional)
+
+| Field | Description |
+|-------|-------------|
+| `enabled` | Enable/disable weather-based discharge skip (default: false) |
+| `api_key` | OpenWeatherMap API key ([get free key](https://openweathermap.org/api)) |
+| `latitude` | Your location latitude |
+| `longitude` | Your location longitude |
+| `bad_weather_threshold_days` | Number of consecutive bad days to trigger skip (default: 2) |
+| `bad_weather_conditions` | Weather conditions considered "bad" for solar |
+| `min_cloud_cover_percent` | Cloud cover % threshold for bad weather (default: 70) |
 
 ## Installation
 

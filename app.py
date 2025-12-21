@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 from deye_client import DeyeCloudClient
+from weather_client import WeatherClient, WeatherAnalyser
 
 # Configure logging
 logging.basicConfig(
@@ -23,6 +24,8 @@ MODE_FORCE_DISCHARGE = "SELLING_FIRST"
 # Global state
 config = {}
 client: DeyeCloudClient = None
+weather_client: WeatherClient = None
+weather_analyser: WeatherAnalyser = None
 scheduler_thread: threading.Thread = None
 scheduler_running = False
 current_state = {
@@ -32,7 +35,13 @@ current_state = {
     "force_discharge_active": False,
     "last_check": None,
     "last_error": None,
-    "scheduler_status": "stopped"
+    "scheduler_status": "stopped",
+    "weather_skip_active": False,
+    "weather_skip_reason": None
+}
+weather_forecast_cache = {
+    "forecast": None,
+    "last_update": None
 }
 
 
@@ -55,7 +64,7 @@ def save_config():
 
 
 def init_client():
-    """Initialize Deye client"""
+    """Initialise Deye client"""
     global client, current_state
     deye_config = config.get("deye", {})
     client = DeyeCloudClient(
@@ -66,7 +75,7 @@ def init_client():
         password=deye_config.get("password"),
         device_sn=deye_config.get("device_sn")
     )
-    logger.info("Deye client initialized")
+    logger.info("Deye client initialised")
 
     # Fetch initial mode
     try:
@@ -79,6 +88,92 @@ def init_client():
                 logger.info(f"Initial work mode: {work_mode}")
     except Exception as e:
         logger.warning(f"Could not fetch initial work mode: {e}")
+
+
+def init_weather_client():
+    """Initialise weather client if enabled"""
+    global weather_client, weather_analyser
+
+    weather_config = config.get("weather", {})
+
+    if not weather_config.get("enabled", False):
+        logger.info("Weather feature disabled")
+        return
+
+    api_key = weather_config.get("api_key", "")
+    if not api_key or api_key == "YOUR_OPENWEATHERMAP_API_KEY":
+        logger.warning("Weather API key not configured - weather feature disabled")
+        return
+
+    latitude = weather_config.get("latitude")
+    longitude = weather_config.get("longitude")
+
+    if latitude is None or longitude is None:
+        logger.warning("Weather location not configured - weather feature disabled")
+        return
+
+    weather_client = WeatherClient(
+        api_key=api_key,
+        latitude=latitude,
+        longitude=longitude
+    )
+
+    bad_conditions = weather_config.get("bad_weather_conditions", ["Rain", "Thunderstorm", "Drizzle", "Snow"])
+    min_cloud_cover = weather_config.get("min_cloud_cover_percent", 70)
+
+    weather_analyser = WeatherAnalyser(
+        bad_conditions=bad_conditions,
+        min_cloud_cover=min_cloud_cover
+    )
+
+    logger.info(f"Weather client initialised for ({latitude}, {longitude})")
+
+
+def get_weather_forecast():
+    """Get weather forecast with caching"""
+    global weather_forecast_cache
+
+    if not weather_client or not weather_analyser:
+        return None
+
+    # Check cache (update every 30 minutes)
+    cache_age = None
+    if weather_forecast_cache["last_update"]:
+        cache_age = (datetime.now() - weather_forecast_cache["last_update"]).total_seconds()
+
+    if cache_age is None or cache_age > 1800:  # 30 minutes
+        try:
+            forecast = weather_client.get_forecast()
+            forecast = weather_analyser.analyse_forecast(forecast)
+            weather_forecast_cache["forecast"] = forecast
+            weather_forecast_cache["last_update"] = datetime.now()
+            logger.info(f"Weather forecast updated: {forecast.get('consecutive_bad_days', 0)} consecutive bad days")
+        except Exception as e:
+            logger.error(f"Failed to fetch weather forecast: {e}")
+            # Return cached data if available
+            if weather_forecast_cache["forecast"]:
+                return weather_forecast_cache["forecast"]
+            return None
+
+    return weather_forecast_cache["forecast"]
+
+
+def should_skip_discharge_for_weather() -> tuple:
+    """Check if discharge should be skipped due to weather forecast"""
+    weather_config = config.get("weather", {})
+
+    if not weather_config.get("enabled", False):
+        return False, "Weather check disabled"
+
+    if not weather_client or not weather_analyser:
+        return False, "Weather not configured"
+
+    forecast = get_weather_forecast()
+    if not forecast:
+        return False, "Weather data unavailable"
+
+    threshold_days = weather_config.get("bad_weather_threshold_days", 2)
+    return weather_analyser.should_skip_discharge(forecast, threshold_days)
 
 
 def is_within_discharge_window() -> bool:
@@ -138,11 +233,19 @@ def scheduler_loop():
 
             in_window = is_within_discharge_window()
 
-            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}")
+            # Check weather forecast for skip condition
+            weather_skip, weather_reason = should_skip_discharge_for_weather()
+            current_state["weather_skip_active"] = weather_skip
+            current_state["weather_skip_reason"] = weather_reason
+
+            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}")
 
             # Determine if we should be in force discharge mode
-            # Force discharge when: in window AND SoC above cutoff
-            should_force_discharge = in_window and (soc is None or soc > cutoff_soc)
+            # Force discharge when: in window AND SoC above cutoff AND NOT weather skip
+            should_force_discharge = in_window and (soc is None or soc > cutoff_soc) and not weather_skip
+
+            if weather_skip and in_window:
+                logger.info(f"Skipping discharge due to weather: {weather_reason}")
 
             window_start = schedule.get("force_discharge_start", "17:30")
             window_end = schedule.get("force_discharge_end", "19:30")
@@ -253,6 +356,7 @@ def index():
 def get_status():
     """Get current system status including TOU settings from inverter"""
     schedule = config.get("schedule", {})
+    weather_config = config.get("weather", {})
 
     # Fetch TOU settings from inverter
     tou_settings = None
@@ -266,12 +370,21 @@ def get_status():
     except Exception as e:
         logger.warning(f"Could not fetch TOU settings: {e}")
 
+    # Include weather status
+    weather_status = {
+        "enabled": weather_config.get("enabled", False),
+        "skip_active": current_state.get("weather_skip_active", False),
+        "skip_reason": current_state.get("weather_skip_reason"),
+        "threshold_days": weather_config.get("bad_weather_threshold_days", 2)
+    }
+
     return jsonify({
         "current_state": current_state,
         "schedule": schedule,
         "in_discharge_window": is_within_discharge_window(),
         "server_time": datetime.now().isoformat(),
-        "tou_settings": tou_settings
+        "tou_settings": tou_settings,
+        "weather": weather_status
     })
 
 
@@ -403,8 +516,105 @@ def get_soc():
         return jsonify({"success": False, "error": str(e)}), 500
 
 
+@app.route('/api/weather')
+def get_weather():
+    """Get weather forecast"""
+    weather_config = config.get("weather", {})
+
+    if not weather_config.get("enabled", False):
+        return jsonify({
+            "success": True,
+            "enabled": False,
+            "message": "Weather feature is disabled"
+        })
+
+    if not weather_client:
+        return jsonify({
+            "success": False,
+            "enabled": True,
+            "error": "Weather client not initialised - check API key and location"
+        })
+
+    forecast = get_weather_forecast()
+    if not forecast:
+        return jsonify({
+            "success": False,
+            "enabled": True,
+            "error": "Failed to fetch weather forecast"
+        })
+
+    skip_active, skip_reason = should_skip_discharge_for_weather()
+
+    return jsonify({
+        "success": True,
+        "enabled": True,
+        "forecast": forecast,
+        "skip_discharge": skip_active,
+        "skip_reason": skip_reason,
+        "threshold_days": weather_config.get("bad_weather_threshold_days", 2),
+        "last_update": weather_forecast_cache.get("last_update").isoformat() if weather_forecast_cache.get("last_update") else None
+    })
+
+
+@app.route('/api/weather/config')
+def get_weather_config():
+    """Get weather configuration (without API key)"""
+    weather_config = config.get("weather", {})
+    return jsonify({
+        "enabled": weather_config.get("enabled", False),
+        "latitude": weather_config.get("latitude"),
+        "longitude": weather_config.get("longitude"),
+        "bad_weather_threshold_days": weather_config.get("bad_weather_threshold_days", 2),
+        "bad_weather_conditions": weather_config.get("bad_weather_conditions", []),
+        "min_cloud_cover_percent": weather_config.get("min_cloud_cover_percent", 70),
+        "api_key_configured": bool(weather_config.get("api_key") and weather_config.get("api_key") != "YOUR_OPENWEATHERMAP_API_KEY")
+    })
+
+
+@app.route('/api/weather/config', methods=['POST'])
+def update_weather_config():
+    """Update weather configuration"""
+    global weather_client, weather_analyser
+
+    try:
+        body = request.get_json()
+
+        if "weather" not in config:
+            config["weather"] = {}
+
+        # Update allowed fields
+        if "enabled" in body:
+            config["weather"]["enabled"] = body["enabled"]
+        if "latitude" in body:
+            config["weather"]["latitude"] = body["latitude"]
+        if "longitude" in body:
+            config["weather"]["longitude"] = body["longitude"]
+        if "bad_weather_threshold_days" in body:
+            config["weather"]["bad_weather_threshold_days"] = body["bad_weather_threshold_days"]
+        if "bad_weather_conditions" in body:
+            config["weather"]["bad_weather_conditions"] = body["bad_weather_conditions"]
+        if "min_cloud_cover_percent" in body:
+            config["weather"]["min_cloud_cover_percent"] = body["min_cloud_cover_percent"]
+        if "api_key" in body and body["api_key"]:
+            config["weather"]["api_key"] = body["api_key"]
+
+        save_config()
+
+        # Reinitialise weather client with new config
+        weather_client = None
+        weather_analyser = None
+        weather_forecast_cache["forecast"] = None
+        weather_forecast_cache["last_update"] = None
+        init_weather_client()
+
+        return jsonify({"success": True})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
 if __name__ == '__main__':
     load_config()
     init_client()
+    init_weather_client()
     start_scheduler()
     app.run(host='0.0.0.0', port=7777, debug=False)

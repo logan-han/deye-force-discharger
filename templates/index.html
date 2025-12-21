@@ -273,6 +273,151 @@
 
         .error-msg { color: #e94560; font-size: 0.8rem; margin-top: 8px; }
         .status-footer { display: flex; justify-content: space-between; font-size: 0.7rem; color: #555; margin-top: 10px; }
+
+        /* Weather Forecast */
+        .weather-container {
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 8px 0;
+        }
+        .weather-day {
+            flex: 0 0 auto;
+            min-width: 80px;
+            background: #1a1a2e;
+            border-radius: 8px;
+            padding: 10px 8px;
+            text-align: center;
+            border: 2px solid transparent;
+        }
+        .weather-day.today {
+            border-color: #4ecca3;
+        }
+        .weather-day.bad-weather {
+            background: rgba(233, 69, 96, 0.15);
+            border-color: #e94560;
+        }
+        .weather-day .day-name {
+            font-size: 0.7rem;
+            color: #888;
+            margin-bottom: 4px;
+        }
+        .weather-day .day-date {
+            font-size: 0.65rem;
+            color: #666;
+            margin-bottom: 6px;
+        }
+        .weather-day .weather-icon {
+            font-size: 1.5rem;
+            margin: 4px 0;
+        }
+        .weather-day .condition {
+            font-size: 0.65rem;
+            color: #aaa;
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .weather-day .temp {
+            font-size: 0.75rem;
+            color: #4ecca3;
+        }
+        .weather-day .clouds {
+            font-size: 0.6rem;
+            color: #888;
+            margin-top: 2px;
+        }
+        .weather-day .pop {
+            font-size: 0.6rem;
+            color: #3498db;
+        }
+        .weather-skip-banner {
+            background: rgba(233, 69, 96, 0.2);
+            border: 1px solid #e94560;
+            border-radius: 6px;
+            padding: 10px 12px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .weather-skip-banner.inactive {
+            background: rgba(78, 204, 163, 0.1);
+            border-color: #4ecca3;
+        }
+        .weather-skip-icon {
+            font-size: 1.2rem;
+        }
+        .weather-skip-text {
+            flex: 1;
+            font-size: 0.8rem;
+        }
+        .weather-skip-text .title {
+            font-weight: 600;
+            margin-bottom: 2px;
+        }
+        .weather-skip-text .reason {
+            color: #aaa;
+            font-size: 0.7rem;
+        }
+        .weather-legend {
+            display: flex;
+            justify-content: center;
+            gap: 15px;
+            margin-top: 8px;
+            font-size: 0.65rem;
+            color: #888;
+        }
+        .weather-legend span {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        .weather-legend .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 2px;
+        }
+        .weather-legend .dot.good { background: #4ecca3; }
+        .weather-legend .dot.bad { background: #e94560; }
+        .weather-disabled {
+            text-align: center;
+            padding: 20px;
+            color: #888;
+            font-size: 0.85rem;
+        }
+        .weather-disabled a {
+            color: #4ecca3;
+            text-decoration: none;
+        }
+        .weather-settings-toggle {
+            float: right;
+            font-size: 0.7rem;
+            color: #4ecca3;
+            cursor: pointer;
+            padding: 2px 6px;
+            border: 1px solid #4ecca3;
+            border-radius: 4px;
+        }
+        .weather-settings-toggle:hover {
+            background: rgba(78, 204, 163, 0.1);
+        }
+        .weather-settings {
+            display: none;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid #2a3f5f;
+        }
+        .weather-settings.show {
+            display: block;
+        }
+        .weather-settings-row {
+            display: flex;
+            gap: 12px;
+            flex-wrap: wrap;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
@@ -290,6 +435,10 @@
                 <div class="status-item">
                     <div class="label">In Window</div>
                     <div class="value" id="inWindow">--</div>
+                </div>
+                <div class="status-item" id="weatherSkipItem" style="display: none;">
+                    <div class="label">Weather Skip</div>
+                    <div class="value" id="weatherSkipStatus">--</div>
                 </div>
             </div>
 
@@ -348,6 +497,53 @@
                 </tbody>
             </table>
             <div class="tou-legend">* Force discharge window</div>
+        </div>
+
+        <!-- Weather Forecast -->
+        <div class="card" id="weatherCard">
+            <h2>
+                Weather Forecast
+                <span class="weather-settings-toggle" onclick="toggleWeatherSettings()">Settings</span>
+            </h2>
+            <div id="weatherContent">
+                <div class="weather-disabled">Loading weather data...</div>
+            </div>
+            <div class="weather-settings" id="weatherSettings">
+                <form id="weatherSettingsForm">
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>
+                                <input type="checkbox" id="weatherEnabled"> Enable Weather Check
+                            </label>
+                        </div>
+                    </div>
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>Latitude</label>
+                            <input type="number" id="weatherLat" step="0.0001" placeholder="-33.8688">
+                        </div>
+                        <div class="setting-item">
+                            <label>Longitude</label>
+                            <input type="number" id="weatherLon" step="0.0001" placeholder="151.2093">
+                        </div>
+                        <div class="setting-item">
+                            <label>Bad Days Threshold</label>
+                            <input type="number" id="weatherThreshold" min="1" max="7" value="2">
+                        </div>
+                        <div class="setting-item">
+                            <label>Cloud Cover %</label>
+                            <input type="number" id="weatherCloudCover" min="0" max="100" value="70">
+                        </div>
+                    </div>
+                    <div class="weather-settings-row">
+                        <div class="setting-item" style="flex: 1;">
+                            <label>API Key (OpenWeatherMap)</label>
+                            <input type="password" id="weatherApiKey" placeholder="Enter API key to update">
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-sm">Save Weather Settings</button>
+                </form>
+            </div>
         </div>
 
         <!-- Settings & Scheduler -->
@@ -553,6 +749,22 @@
                 inWindow.textContent = data.in_discharge_window ? 'YES' : 'NO';
                 inWindow.className = `value ${data.in_discharge_window ? 'active' : 'inactive'}`;
 
+                // Weather skip status
+                const weatherSkipItem = document.getElementById('weatherSkipItem');
+                const weatherSkipStatus = document.getElementById('weatherSkipStatus');
+                if (data.weather && data.weather.enabled) {
+                    weatherSkipItem.style.display = 'block';
+                    if (data.weather.skip_active) {
+                        weatherSkipStatus.textContent = 'ACTIVE';
+                        weatherSkipStatus.className = 'value inactive';
+                    } else {
+                        weatherSkipStatus.textContent = 'OFF';
+                        weatherSkipStatus.className = 'value active';
+                    }
+                } else {
+                    weatherSkipItem.style.display = 'none';
+                }
+
                 updateSchedulerButtons(state.scheduler_status === 'running');
 
                 // SoC markers
@@ -654,6 +866,194 @@
 
         refreshStatus();
         refreshInterval = setInterval(refreshStatus, 10000);
+
+        // Weather functionality
+        let weatherData = null;
+
+        function getWeatherIcon(condition, icon) {
+            const iconMap = {
+                'Clear': '☀️',
+                'Clouds': '☁️',
+                'Rain': '🌧️',
+                'Drizzle': '🌦️',
+                'Thunderstorm': '⛈️',
+                'Snow': '❄️',
+                'Mist': '🌫️',
+                'Fog': '🌫️',
+                'Haze': '🌫️'
+            };
+            return iconMap[condition] || '🌤️';
+        }
+
+        function formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+        }
+
+        function renderWeatherForecast(data) {
+            const container = document.getElementById('weatherContent');
+
+            if (!data.enabled) {
+                container.innerHTML = `
+                    <div class="weather-disabled">
+                        Weather feature is disabled.<br>
+                        <small>Enable in Settings to skip discharge during bad weather.</small>
+                    </div>
+                `;
+                return;
+            }
+
+            if (!data.success || !data.forecast) {
+                container.innerHTML = `
+                    <div class="weather-disabled">
+                        ${data.error || 'Unable to fetch weather data'}<br>
+                        <small>Check API key and location settings.</small>
+                    </div>
+                `;
+                return;
+            }
+
+            const forecast = data.forecast;
+            const daily = forecast.daily || [];
+
+            // Skip status banner
+            let bannerHtml = '';
+            if (data.skip_discharge) {
+                bannerHtml = `
+                    <div class="weather-skip-banner">
+                        <span class="weather-skip-icon">⚠️</span>
+                        <div class="weather-skip-text">
+                            <div class="title" style="color: #e94560;">Discharge Skipped</div>
+                            <div class="reason">${data.skip_reason}</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                bannerHtml = `
+                    <div class="weather-skip-banner inactive">
+                        <span class="weather-skip-icon">✓</span>
+                        <div class="weather-skip-text">
+                            <div class="title" style="color: #4ecca3;">Discharge Allowed</div>
+                            <div class="reason">${data.skip_reason}</div>
+                        </div>
+                    </div>
+                `;
+            }
+
+            // Forecast cards
+            let forecastHtml = '<div class="weather-container">';
+            daily.forEach((day, index) => {
+                const classes = ['weather-day'];
+                if (day.is_today) classes.push('today');
+                if (day.is_bad_weather) classes.push('bad-weather');
+
+                const dayName = day.is_today ? 'Today' : day.day_name.substring(0, 3);
+                const icon = getWeatherIcon(day.condition, day.icon);
+                const tempMin = day.temp_min !== null ? Math.round(day.temp_min) : '--';
+                const tempMax = day.temp_max !== null ? Math.round(day.temp_max) : '--';
+
+                forecastHtml += `
+                    <div class="${classes.join(' ')}">
+                        <div class="day-name">${dayName}</div>
+                        <div class="day-date">${formatDate(day.date)}</div>
+                        <div class="weather-icon">${icon}</div>
+                        <div class="condition">${day.condition}</div>
+                        <div class="temp">${tempMin}° / ${tempMax}°</div>
+                        <div class="clouds">☁️ ${day.clouds}%</div>
+                        ${day.pop > 0 ? `<div class="pop">💧 ${day.pop}%</div>` : ''}
+                    </div>
+                `;
+            });
+            forecastHtml += '</div>';
+
+            // Legend
+            const legendHtml = `
+                <div class="weather-legend">
+                    <span><div class="dot good"></div> Good for solar</span>
+                    <span><div class="dot bad"></div> Bad weather (skip discharge)</span>
+                </div>
+            `;
+
+            container.innerHTML = bannerHtml + forecastHtml + legendHtml;
+        }
+
+        async function refreshWeather() {
+            try {
+                const response = await fetch('/api/weather');
+                weatherData = await response.json();
+                renderWeatherForecast(weatherData);
+            } catch (error) {
+                console.error('Weather fetch error:', error);
+                document.getElementById('weatherContent').innerHTML = `
+                    <div class="weather-disabled">Error loading weather data</div>
+                `;
+            }
+        }
+
+        async function loadWeatherConfig() {
+            try {
+                const response = await fetch('/api/weather/config');
+                const config = await response.json();
+
+                document.getElementById('weatherEnabled').checked = config.enabled;
+                document.getElementById('weatherLat').value = config.latitude || '';
+                document.getElementById('weatherLon').value = config.longitude || '';
+                document.getElementById('weatherThreshold').value = config.bad_weather_threshold_days || 2;
+                document.getElementById('weatherCloudCover').value = config.min_cloud_cover_percent || 70;
+            } catch (error) {
+                console.error('Error loading weather config:', error);
+            }
+        }
+
+        function toggleWeatherSettings() {
+            const settings = document.getElementById('weatherSettings');
+            settings.classList.toggle('show');
+            if (settings.classList.contains('show')) {
+                loadWeatherConfig();
+            }
+        }
+
+        document.getElementById('weatherSettingsForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+
+            const payload = {
+                enabled: document.getElementById('weatherEnabled').checked,
+                latitude: parseFloat(document.getElementById('weatherLat').value) || null,
+                longitude: parseFloat(document.getElementById('weatherLon').value) || null,
+                bad_weather_threshold_days: parseInt(document.getElementById('weatherThreshold').value) || 2,
+                min_cloud_cover_percent: parseInt(document.getElementById('weatherCloudCover').value) || 70
+            };
+
+            const apiKey = document.getElementById('weatherApiKey').value;
+            if (apiKey) {
+                payload.api_key = apiKey;
+            }
+
+            try {
+                const response = await fetch('/api/weather/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    showToast('Weather settings saved');
+                    document.getElementById('weatherApiKey').value = '';
+                    toggleWeatherSettings();
+                    refreshWeather();
+                } else {
+                    showToast(`Error: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        });
+
+        // Initial weather load
+        refreshWeather();
+        // Refresh weather every 5 minutes
+        setInterval(refreshWeather, 300000);
     </script>
 </body>
 </html>
