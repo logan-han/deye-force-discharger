@@ -303,9 +303,9 @@ class TestWeatherAnalyser:
         forecast = {
             "success": True,
             "daily": [
-                {"condition": "Rain", "clouds": 80, "pop": 70},
-                {"condition": "Clear", "clouds": 10, "pop": 5},
-                {"condition": "Thunderstorm", "clouds": 95, "pop": 90}
+                {"date": "2023-12-22", "condition": "Rain", "clouds": 80, "pop": 70},
+                {"date": "2023-12-23", "condition": "Clear", "clouds": 10, "pop": 5},
+                {"date": "2023-12-24", "condition": "Thunderstorm", "clouds": 95, "pop": 90}
             ]
         }
 

@@ -103,7 +103,8 @@ class WeatherClient:
 
         for i, day in enumerate(daily_list[:8]):  # Up to 8 days
             dt = datetime.fromtimestamp(day.get("dt", 0))
-            weather = day.get("weather", [{}])[0]
+            weather_list = day.get("weather", [])
+            weather = weather_list[0] if weather_list else {}
 
             daily_forecasts.append({
                 "date": dt.strftime("%Y-%m-%d"),
@@ -121,12 +122,14 @@ class WeatherClient:
                 "is_bad_weather": False  # Will be calculated by analyzer
             })
 
+        current_weather_list = current.get("weather", [])
+        current_weather = current_weather_list[0] if current_weather_list else {}
         return {
             "success": True,
             "location": data.get("timezone", "Unknown"),
             "current": {
                 "temp": current.get("temp"),
-                "condition": current.get("weather", [{}])[0].get("main", "Unknown"),
+                "condition": current_weather.get("main", "Unknown"),
                 "clouds": current.get("clouds", 0)
             },
             "daily": daily_forecasts
@@ -210,7 +213,7 @@ class WeatherAnalyser:
         bad_conditions: List[str] = None,
         min_cloud_cover: int = 70
     ):
-        self.bad_conditions = bad_conditions or ["Rain", "Thunderstorm", "Drizzle", "Snow"]
+        self.bad_conditions = bad_conditions if bad_conditions is not None else ["Rain", "Thunderstorm", "Drizzle", "Snow"]
         self.min_cloud_cover = min_cloud_cover
 
     def analyse_forecast(self, forecast: Dict[str, Any]) -> Dict[str, Any]:
