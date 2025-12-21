@@ -3,7 +3,7 @@ from unittest.mock import Mock, patch, MagicMock
 from datetime import datetime
 import requests
 
-from weather_client import WeatherClient, WeatherAnalyser
+from weather_client import WeatherClient, WeatherAnalyser, WeatherAPIError
 
 
 class TestWeatherClient:
@@ -490,3 +490,204 @@ class TestWeatherAnalyserEdgeCases:
         analyser = WeatherAnalyser()
 
         assert analyser._count_consecutive_bad_days([]) == 0
+
+
+class TestWeatherAPIError:
+    """Tests for WeatherAPIError exception class"""
+
+    def test_basic_error(self):
+        """Test basic error creation"""
+        error = WeatherAPIError("Test error")
+        assert str(error) == "Test error"
+        assert error.message == "Test error"
+        assert error.is_temporary is False
+        assert error.status_code is None
+
+    def test_temporary_error(self):
+        """Test temporary error flag"""
+        error = WeatherAPIError("Timeout", is_temporary=True)
+        assert error.is_temporary is True
+
+    def test_error_with_status_code(self):
+        """Test error with status code"""
+        error = WeatherAPIError("Server error", is_temporary=True, status_code=503)
+        assert error.status_code == 503
+
+
+class TestWeatherClientAPIDown:
+    """Tests for weather client when API is down"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(
+            api_key="test_api_key",
+            latitude=-33.8688,
+            longitude=151.2093
+        )
+
+    @patch('weather_client.requests.get')
+    def test_connection_timeout(self, mock_get):
+        """Test handling of connection timeout"""
+        mock_get.side_effect = requests.exceptions.Timeout("Connection timed out")
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "timed out" in result["error"].lower()
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    def test_dns_resolution_failure(self, mock_get):
+        """Test handling of DNS resolution failure"""
+        mock_get.side_effect = requests.exceptions.ConnectionError(
+            "Failed to establish a new connection: [Errno -2] Name or service not known"
+        )
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "dns" in result["error"].lower() or "hostname" in result["error"].lower()
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    def test_connection_refused(self, mock_get):
+        """Test handling of connection refused error"""
+        mock_get.side_effect = requests.exceptions.ConnectionError(
+            "Connection refused"
+        )
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "refused" in result["error"].lower() or "connect" in result["error"].lower()
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_server_error_503(self, mock_sleep, mock_get):
+        """Test handling of 503 server error with retries"""
+        mock_response = Mock()
+        mock_response.status_code = 503
+        mock_get.return_value = mock_response
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "server error" in result["error"].lower() or "503" in result["error"]
+        assert result.get("is_temporary") is True
+        # Should have retried
+        assert mock_get.call_count >= 2
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_rate_limit_429(self, mock_sleep, mock_get):
+        """Test handling of rate limit (429) error"""
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.headers = {"Retry-After": "30"}
+        mock_get.return_value = mock_response
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "rate limit" in result["error"].lower()
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    def test_invalid_api_key_401(self, mock_get):
+        """Test handling of invalid API key (401)"""
+        # First call (One Call API) returns 401
+        mock_response_401 = Mock()
+        mock_response_401.status_code = 401
+
+        mock_get.return_value = mock_response_401
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "api key" in result["error"].lower() or "invalid" in result["error"].lower()
+        assert result.get("is_temporary") is False
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_server_error_recovery(self, mock_sleep, mock_get):
+        """Test recovery after transient server error"""
+        # First call fails with 503, second succeeds
+        mock_response_fail = Mock()
+        mock_response_fail.status_code = 503
+
+        mock_response_success = Mock()
+        mock_response_success.status_code = 200
+        mock_response_success.raise_for_status = Mock()
+        mock_response_success.json.return_value = {
+            "timezone": "Test/Zone",
+            "current": {"temp": 20, "weather": [{"main": "Clear"}], "clouds": 10},
+            "daily": []
+        }
+
+        mock_get.side_effect = [mock_response_fail, mock_response_success]
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is True
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_timeout_recovery(self, mock_sleep, mock_get):
+        """Test recovery after timeout"""
+        # First call times out, second succeeds
+        mock_response_success = Mock()
+        mock_response_success.status_code = 200
+        mock_response_success.raise_for_status = Mock()
+        mock_response_success.json.return_value = {
+            "timezone": "Test/Zone",
+            "current": {"temp": 20, "weather": [{"main": "Clear"}], "clouds": 10},
+            "daily": []
+        }
+
+        mock_get.side_effect = [
+            requests.exceptions.Timeout("Timeout"),
+            mock_response_success
+        ]
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is True
+
+    @patch('weather_client.requests.get')
+    def test_both_apis_down(self, mock_get):
+        """Test when both One Call and legacy APIs are down"""
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection failed")
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "daily" in result
+        assert result["daily"] == []
+
+    @patch('weather_client.requests.get')
+    def test_generic_request_exception(self, mock_get):
+        """Test handling of generic RequestException"""
+        mock_get.side_effect = requests.exceptions.RequestException("Unknown error")
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "error" in result
+
+    @patch('weather_client.requests.get')
+    def test_uses_cache_on_api_failure(self, mock_get):
+        """Test that cached data is returned when API fails"""
+        # Pre-populate cache
+        cached_forecast = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "condition": "Clear"}]
+        }
+        self.client._cache["forecast"] = cached_forecast
+        self.client._cache_time = datetime.now()
+
+        # API call should not be made when cache is valid
+        result = self.client.get_forecast()
+
+        mock_get.assert_not_called()
+        assert result == cached_forecast

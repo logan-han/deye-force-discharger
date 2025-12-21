@@ -1,9 +1,23 @@
 import requests
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List
 
 logger = logging.getLogger(__name__)
+
+
+class WeatherAPIError(Exception):
+    """Custom exception for weather API errors"""
+
+    def __init__(self, message: str, is_temporary: bool = False, status_code: int = None):
+        super().__init__(message)
+        self.message = message
+        self.is_temporary = is_temporary  # True for errors that may resolve on retry
+        self.status_code = status_code
+
+    def __str__(self):
+        return self.message
 
 
 class WeatherClient:
@@ -24,6 +38,114 @@ class WeatherClient:
             return False
         return (datetime.now() - self._cache_time).total_seconds() < self._cache_duration
 
+    def _make_request_with_retry(self, url: str, params: dict, max_retries: int = 2) -> requests.Response:
+        """
+        Make an HTTP request with retry logic for transient errors.
+
+        Args:
+            url: The URL to request
+            params: Query parameters
+            max_retries: Maximum number of retry attempts for transient errors
+
+        Returns:
+            Response object
+
+        Raises:
+            WeatherAPIError: On permanent failures or after retries exhausted
+        """
+        last_error = None
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.get(url, params=params, timeout=30)
+
+                # Handle rate limiting with retry
+                if response.status_code == 429:
+                    if attempt < max_retries:
+                        retry_after = int(response.headers.get("Retry-After", 60))
+                        wait_time = min(retry_after, 60)  # Cap at 60 seconds
+                        logger.warning(f"Rate limited, waiting {wait_time}s before retry")
+                        time.sleep(wait_time)
+                        continue
+                    raise WeatherAPIError(
+                        "OpenWeatherMap API rate limit exceeded",
+                        is_temporary=True,
+                        status_code=429
+                    )
+
+                # Server errors - retry
+                if response.status_code >= 500:
+                    if attempt < max_retries:
+                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                        logger.warning(f"Server error {response.status_code}, retrying in {wait_time}s")
+                        time.sleep(wait_time)
+                        continue
+                    raise WeatherAPIError(
+                        f"OpenWeatherMap API server error (HTTP {response.status_code})",
+                        is_temporary=True,
+                        status_code=response.status_code
+                    )
+
+                return response
+
+            except requests.exceptions.Timeout as e:
+                last_error = e
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Request timeout, retrying in {wait_time}s")
+                    time.sleep(wait_time)
+                    continue
+                raise WeatherAPIError(
+                    "OpenWeatherMap API request timed out",
+                    is_temporary=True
+                )
+
+            except requests.exceptions.ConnectionError as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                # DNS resolution failure
+                if "name or service not known" in error_str or "getaddrinfo" in error_str or "nodename nor servname" in error_str:
+                    if attempt < max_retries:
+                        wait_time = 2 ** attempt
+                        logger.warning(f"DNS resolution failed, retrying in {wait_time}s")
+                        time.sleep(wait_time)
+                        continue
+                    raise WeatherAPIError(
+                        "Unable to resolve OpenWeatherMap API hostname (DNS failure)",
+                        is_temporary=True
+                    )
+
+                # Connection refused
+                if "connection refused" in error_str:
+                    raise WeatherAPIError(
+                        "Connection to OpenWeatherMap API refused",
+                        is_temporary=True
+                    )
+
+                # Generic connection error - retry
+                if attempt < max_retries:
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Connection error, retrying in {wait_time}s: {e}")
+                    time.sleep(wait_time)
+                    continue
+                raise WeatherAPIError(
+                    f"Unable to connect to OpenWeatherMap API: {e}",
+                    is_temporary=True
+                )
+
+            except requests.exceptions.RequestException as e:
+                raise WeatherAPIError(
+                    f"OpenWeatherMap API request failed: {e}",
+                    is_temporary=False
+                )
+
+        # Should not reach here, but just in case
+        raise WeatherAPIError(
+            f"OpenWeatherMap API request failed after {max_retries + 1} attempts",
+            is_temporary=True
+        )
+
     def get_forecast(self) -> Dict[str, Any]:
         """
         Get 8-day weather forecast (today + 7 days)
@@ -35,7 +157,7 @@ class WeatherClient:
 
         try:
             # Use One Call API 3.0 for daily forecast
-            url = f"https://api.openweathermap.org/data/3.0/onecall"
+            url = "https://api.openweathermap.org/data/3.0/onecall"
             params = {
                 "lat": self.latitude,
                 "lon": self.longitude,
@@ -45,7 +167,7 @@ class WeatherClient:
             }
 
             logger.info(f"Fetching weather forecast for ({self.latitude}, {self.longitude})")
-            response = requests.get(url, params=params, timeout=30)
+            response = self._make_request_with_retry(url, params)
 
             # If One Call 3.0 fails (requires subscription), fallback to 2.5
             if response.status_code == 401 or response.status_code == 403:
@@ -61,8 +183,11 @@ class WeatherClient:
 
             return forecast
 
-        except requests.exceptions.RequestException as e:
+        except WeatherAPIError as e:
             logger.warning(f"One Call API failed: {e}, trying legacy API")
+            return self._get_forecast_legacy()
+        except requests.exceptions.HTTPError as e:
+            logger.warning(f"One Call API HTTP error: {e}, trying legacy API")
             return self._get_forecast_legacy()
 
     def _get_forecast_legacy(self) -> Dict[str, Any]:
@@ -80,7 +205,19 @@ class WeatherClient:
             }
 
             logger.info("Fetching weather forecast using legacy 5-day API")
-            response = requests.get(url, params=params, timeout=30)
+            response = self._make_request_with_retry(url, params)
+
+            # Handle authentication errors
+            if response.status_code == 401:
+                error_msg = "Invalid OpenWeatherMap API key"
+                logger.error(error_msg)
+                return {"success": False, "error": error_msg, "daily": [], "is_temporary": False}
+
+            if response.status_code == 403:
+                error_msg = "OpenWeatherMap API access forbidden - check API key permissions"
+                logger.error(error_msg)
+                return {"success": False, "error": error_msg, "daily": [], "is_temporary": False}
+
             response.raise_for_status()
             data = response.json()
 
@@ -90,9 +227,30 @@ class WeatherClient:
 
             return forecast
 
+        except WeatherAPIError as e:
+            logger.error(f"Weather API error: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+                "daily": [],
+                "is_temporary": e.is_temporary
+            }
+        except requests.exceptions.HTTPError as e:
+            logger.error(f"HTTP error fetching weather: {e}")
+            return {
+                "success": False,
+                "error": f"OpenWeatherMap API returned an error: {e}",
+                "daily": [],
+                "is_temporary": False
+            }
         except Exception as e:
-            logger.error(f"Failed to fetch weather forecast: {e}")
-            return {"success": False, "error": str(e), "daily": []}
+            logger.error(f"Unexpected error fetching weather forecast: {e}")
+            return {
+                "success": False,
+                "error": f"Unexpected error: {e}",
+                "daily": [],
+                "is_temporary": False
+            }
 
     def _parse_onecall_forecast(self, data: Dict) -> Dict[str, Any]:
         """Parse One Call API response into daily forecast"""

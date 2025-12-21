@@ -431,3 +431,967 @@ class TestSchedulerWeatherIntegration:
             should_force_discharge = in_window and (soc is None or soc > cutoff_soc) and not weather_skip
 
             assert should_force_discharge is False
+
+
+class TestLoadAndSaveConfig:
+    """Tests for config loading and saving"""
+
+    @patch('builtins.open', create=True)
+    @patch('app.json.load')
+    def test_load_config(self, mock_json_load, mock_open):
+        """Test loading configuration"""
+        mock_json_load.return_value = {"test": "config"}
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            result = app_module.load_config()
+
+            assert result == {"test": "config"}
+            mock_open.assert_called_once()
+
+    @patch('builtins.open', create=True)
+    @patch('app.json.dump')
+    def test_save_config(self, mock_json_dump, mock_open):
+        """Test saving configuration"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {"test": "data"}
+            app_module.save_config()
+
+            mock_open.assert_called_once()
+            mock_json_dump.assert_called_once()
+
+
+class TestInitClient:
+    """Tests for init_client function"""
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_success(self, mock_deye):
+        """Test successful client initialization"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {
+            "success": True,
+            "systemWorkMode": "SELLING_FIRST"
+        }
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {
+            "deye": {
+                "api_base_url": "https://test.com",
+                "app_id": "test_app",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test_pass",
+                "device_sn": "TEST123"
+            }
+        }
+        app_module.current_state = {
+            "mode": "unknown",
+            "force_discharge_active": False
+        }
+
+        app_module.init_client()
+
+        mock_deye.assert_called_once()
+        assert app_module.current_state["mode"] == "SELLING_FIRST"
+        assert app_module.current_state["force_discharge_active"] is True
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_work_mode_failure(self, mock_deye):
+        """Test client init when work mode fetch fails"""
+        mock_client = Mock()
+        mock_client.get_work_mode.side_effect = Exception("API error")
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {"mode": "unknown", "force_discharge_active": False}
+
+        # Should not raise, just log warning
+        app_module.init_client()
+
+        assert app_module.current_state["mode"] == "unknown"
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_no_work_mode_in_response(self, mock_deye):
+        """Test client init when work mode response has no mode"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {"success": True}
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {"mode": "unknown", "force_discharge_active": False}
+
+        app_module.init_client()
+
+        assert app_module.current_state["mode"] == "unknown"
+
+
+class TestGetWeatherForecastCoverage:
+    """Additional tests for get_weather_forecast"""
+
+    def test_forecast_fetch_exception(self):
+        """Test forecast fetch handles exceptions"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            mock_weather_client = Mock()
+            mock_weather_client.get_forecast.side_effect = Exception("API error")
+            app_module.weather_client = mock_weather_client
+            app_module.weather_analyser = Mock()
+            app_module.weather_forecast_cache = {
+                "forecast": {"cached": True},
+                "last_update": None  # Force refresh
+            }
+
+            result = app_module.get_weather_forecast()
+
+            # Should return cached data on error
+            assert result == {"cached": True}
+
+    def test_forecast_fetch_exception_no_cache(self):
+        """Test forecast fetch returns None when error and no cache"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            mock_weather_client = Mock()
+            mock_weather_client.get_forecast.side_effect = Exception("API error")
+            app_module.weather_client = mock_weather_client
+            app_module.weather_analyser = Mock()
+            app_module.weather_forecast_cache = {
+                "forecast": None,
+                "last_update": None
+            }
+
+            result = app_module.get_weather_forecast()
+
+            assert result is None
+
+
+class TestIsWithinDischargeWindowOvernightEdgeCases:
+    """Tests for overnight discharge window handling"""
+
+    @patch('app.datetime')
+    def test_overnight_window_before_midnight(self, mock_datetime):
+        """Test overnight window when time is before midnight"""
+        mock_now = datetime(2023, 12, 22, 23, 0, 0)  # 11 PM
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "schedule": {
+                    "force_discharge_start": "22:00",  # 10 PM
+                    "force_discharge_end": "06:00"     # 6 AM next day
+                }
+            }
+
+            result = app_module.is_within_discharge_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_overnight_window_after_midnight(self, mock_datetime):
+        """Test overnight window when time is after midnight"""
+        mock_now = datetime(2023, 12, 23, 2, 0, 0)  # 2 AM
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "schedule": {
+                    "force_discharge_start": "22:00",
+                    "force_discharge_end": "06:00"
+                }
+            }
+
+            result = app_module.is_within_discharge_window()
+
+            assert result is True
+
+    @patch('app.datetime')
+    def test_overnight_window_outside(self, mock_datetime):
+        """Test overnight window when outside the window"""
+        mock_now = datetime(2023, 12, 22, 12, 0, 0)  # Noon
+        mock_datetime.now.return_value = mock_now
+
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "schedule": {
+                    "force_discharge_start": "22:00",
+                    "force_discharge_end": "06:00"
+                }
+            }
+
+            result = app_module.is_within_discharge_window()
+
+            assert result is False
+
+
+class TestSchedulerFunctions:
+    """Tests for start_scheduler and stop_scheduler"""
+
+    def test_start_scheduler_success(self):
+        """Test starting scheduler"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.scheduler_running = False
+            app_module.scheduler_thread = None
+
+            with patch('app.threading.Thread') as mock_thread:
+                mock_thread_instance = Mock()
+                mock_thread.return_value = mock_thread_instance
+
+                result = app_module.start_scheduler()
+
+                assert result is True
+                mock_thread_instance.start.assert_called_once()
+                assert app_module.scheduler_running is True
+
+    def test_start_scheduler_already_running(self):
+        """Test starting scheduler when already running"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.scheduler_running = True
+
+            result = app_module.start_scheduler()
+
+            assert result is False
+
+    def test_stop_scheduler(self):
+        """Test stopping scheduler"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.scheduler_running = True
+
+            result = app_module.stop_scheduler()
+
+            assert result is True
+            assert app_module.scheduler_running is False
+
+
+class TestFlaskRoutes:
+    """Tests for Flask API routes"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_instance.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_instance.get_tou_settings.return_value = {"success": True, "timeUseSettingItems": []}
+            mock_instance.get_device_latest_data.return_value = {"soc": 75}
+            mock_instance.get_soc.return_value = 75
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {"device_sn": "TEST123"},
+                "schedule": {
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30",
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000
+                },
+                "weather": {"enabled": False}
+            }
+            app_module.client = mock_instance
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module, mock_instance
+
+    def test_index_route(self, test_client):
+        """Test index route returns template"""
+        client, app_module, _ = test_client
+
+        with patch('app.render_template') as mock_render:
+            mock_render.return_value = "HTML"
+            response = client.get('/')
+            mock_render.assert_called_once_with('index.html')
+
+    def test_get_device_info(self, test_client):
+        """Test /api/device endpoint"""
+        client, app_module, mock_deye = test_client
+
+        response = client.get('/api/device')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    def test_get_device_info_error(self, test_client):
+        """Test /api/device endpoint with error"""
+        client, app_module, mock_deye = test_client
+        mock_deye.get_device_latest_data.side_effect = Exception("API error")
+
+        response = client.get('/api/device')
+        data = json.loads(response.data)
+
+        assert response.status_code == 500
+        assert data["success"] is False
+
+    def test_get_work_mode(self, test_client):
+        """Test /api/work-mode GET endpoint"""
+        client, app_module, mock_deye = test_client
+
+        response = client.get('/api/work-mode')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    def test_get_work_mode_error(self, test_client):
+        """Test /api/work-mode GET endpoint with error"""
+        client, app_module, mock_deye = test_client
+        mock_deye.get_work_mode.side_effect = Exception("API error")
+
+        response = client.get('/api/work-mode')
+        data = json.loads(response.data)
+
+        assert response.status_code == 500
+        assert data["success"] is False
+
+    def test_set_work_mode_success(self, test_client):
+        """Test /api/work-mode POST endpoint success"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_work_mode.return_value = {"code": "0"}
+
+        response = client.post('/api/work-mode',
+            data=json.dumps({"mode": "SELLING_FIRST"}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    def test_set_work_mode_no_mode(self, test_client):
+        """Test /api/work-mode POST without mode"""
+        client, app_module, mock_deye = test_client
+
+        response = client.post('/api/work-mode',
+            data=json.dumps({}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 400
+        assert data["success"] is False
+
+    def test_set_work_mode_failure(self, test_client):
+        """Test /api/work-mode POST with API failure"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_work_mode.return_value = {"code": "1", "msg": "Error"}
+
+        response = client.post('/api/work-mode',
+            data=json.dumps({"mode": "SELLING_FIRST"}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 400
+        assert data["success"] is False
+
+    def test_set_work_mode_exception(self, test_client):
+        """Test /api/work-mode POST with exception"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_work_mode.side_effect = Exception("API error")
+
+        response = client.post('/api/work-mode',
+            data=json.dumps({"mode": "SELLING_FIRST"}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 500
+        assert data["success"] is False
+
+    def test_get_tou(self, test_client):
+        """Test /api/tou endpoint"""
+        client, app_module, mock_deye = test_client
+
+        response = client.get('/api/tou')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    def test_get_tou_error(self, test_client):
+        """Test /api/tou endpoint with error"""
+        client, app_module, mock_deye = test_client
+        mock_deye.get_tou_settings.side_effect = Exception("API error")
+
+        response = client.get('/api/tou')
+        data = json.loads(response.data)
+
+        assert response.status_code == 500
+        assert data["success"] is False
+
+    def test_get_config(self, test_client):
+        """Test /api/config GET endpoint"""
+        client, app_module, _ = test_client
+
+        response = client.get('/api/config')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert "schedule" in data
+        assert "device_sn" in data
+
+    @patch('app.save_config')
+    def test_update_config(self, mock_save, test_client):
+        """Test /api/config POST endpoint"""
+        client, app_module, mock_deye = test_client
+
+        response = client.post('/api/config',
+            data=json.dumps({
+                "schedule": {"min_soc_reserve": 25}
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        mock_save.assert_called_once()
+
+    @patch('app.save_config')
+    def test_update_config_with_tou(self, mock_save, test_client):
+        """Test /api/config POST with TOU update"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_tou_settings.return_value = {"success": True}
+        app_module.current_state = {"force_discharge_active": False}
+
+        response = client.post('/api/config',
+            data=json.dumps({
+                "schedule": {"min_soc_reserve": 25},
+                "update_tou": True
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    @patch('app.save_config')
+    def test_update_config_tou_failure(self, mock_save, test_client):
+        """Test /api/config POST with TOU failure"""
+        client, app_module, mock_deye = test_client
+        mock_deye.set_tou_settings.return_value = {"success": False, "msg": "Error"}
+        app_module.current_state = {"force_discharge_active": True}
+
+        response = client.post('/api/config',
+            data=json.dumps({
+                "schedule": {"force_discharge_cutoff_soc": 60},
+                "update_tou": True
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+
+    def test_update_config_exception(self, test_client):
+        """Test /api/config POST with exception"""
+        client, app_module, _ = test_client
+
+        with patch('app.save_config', side_effect=Exception("File error")):
+            response = client.post('/api/config',
+                data=json.dumps({"schedule": {}}),
+                content_type='application/json'
+            )
+            data = json.loads(response.data)
+
+            assert response.status_code == 500
+            assert data["success"] is False
+
+    def test_api_start_scheduler(self, test_client):
+        """Test /api/scheduler/start endpoint"""
+        client, app_module, _ = test_client
+
+        with patch('app.start_scheduler', return_value=True):
+            response = client.post('/api/scheduler/start')
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data["success"] is True
+
+    def test_api_start_scheduler_already_running(self, test_client):
+        """Test /api/scheduler/start when already running"""
+        client, app_module, _ = test_client
+
+        with patch('app.start_scheduler', return_value=False):
+            response = client.post('/api/scheduler/start')
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data["success"] is False
+
+    def test_api_stop_scheduler(self, test_client):
+        """Test /api/scheduler/stop endpoint"""
+        client, app_module, _ = test_client
+
+        with patch('app.stop_scheduler', return_value=True):
+            response = client.post('/api/scheduler/stop')
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data["success"] is True
+
+    def test_get_soc(self, test_client):
+        """Test /api/soc endpoint"""
+        client, app_module, mock_deye = test_client
+
+        response = client.get('/api/soc')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert data["soc"] == 75
+
+    def test_get_soc_error(self, test_client):
+        """Test /api/soc endpoint with error"""
+        client, app_module, mock_deye = test_client
+        mock_deye.get_soc.side_effect = Exception("API error")
+
+        response = client.get('/api/soc')
+        data = json.loads(response.data)
+
+        assert response.status_code == 500
+        assert data["success"] is False
+
+    def test_get_weather_no_forecast(self, test_client):
+        """Test /api/weather with no forecast available"""
+        client, app_module, _ = test_client
+        app_module.config["weather"]["enabled"] = True
+        app_module.weather_client = Mock()
+
+        with patch('app.get_weather_forecast', return_value=None):
+            response = client.get('/api/weather')
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data["success"] is False
+
+    def test_update_weather_config_error(self, test_client):
+        """Test POST /api/weather/config with error"""
+        client, app_module, _ = test_client
+
+        with patch('app.save_config', side_effect=Exception("Error")):
+            response = client.post('/api/weather/config',
+                data=json.dumps({"enabled": True}),
+                content_type='application/json'
+            )
+            data = json.loads(response.data)
+
+            assert response.status_code == 500
+            assert data["success"] is False
+
+    def test_status_tou_exception(self, test_client):
+        """Test /api/status when TOU fetch fails"""
+        client, app_module, mock_deye = test_client
+        mock_deye.get_tou_settings.side_effect = Exception("API error")
+
+        response = client.get('/api/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["tou_settings"] is None
+
+
+class TestSchedulerLoop:
+    """Tests for scheduler_loop function"""
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_activates_force_discharge(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler activates force discharge"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+        mock_sleep.side_effect = [None] * 5 + [StopIteration()]  # Stop after a few iterations
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            # Run one iteration then stop
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Should have tried to activate force discharge
+            mock_client.set_work_mode.assert_called_with("SELLING_FIRST")
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_deactivates_force_discharge(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler deactivates force discharge"""
+        mock_window.return_value = False  # Outside window
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "SELLING_FIRST"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "SELLING_FIRST",
+                "force_discharge_active": True,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Should have tried to deactivate force discharge
+            mock_client.set_work_mode.assert_called_with("ZERO_EXPORT_TO_CT")
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_handles_exception(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler handles exceptions gracefully"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.side_effect = Exception("API error")
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {"schedule": {}}
+            app_module.current_state = {
+                "mode": "unknown",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            # Should not raise, just log error
+            app_module.scheduler_loop()
+
+            assert app_module.current_state["last_error"] == "API error"
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_work_mode_fetch_fails(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler handles work mode fetch failure"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.side_effect = Exception("API error")
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "unknown",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            # Should not raise
+            app_module.scheduler_loop()
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_set_mode_fails(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler handles set work mode failure"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_client.set_work_mode.return_value = {"success": False, "msg": "Failed"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            assert app_module.current_state["last_error"] == "Failed"
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_tou_update_fails(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler handles TOU update failure"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": False, "msg": "TOU failed"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            # Should not raise, TOU failure is logged but continues
+            app_module.scheduler_loop()
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_weather_skip_logs(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler logs weather skip"""
+        mock_window.return_value = True
+        mock_weather.return_value = (True, "Bad weather for 3 days")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            assert app_module.current_state["weather_skip_active"] is True
+            assert app_module.current_state["weather_skip_reason"] == "Bad weather for 3 days"
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_deactivate_due_to_soc(self, mock_weather, mock_window, mock_sleep):
+        """Test scheduler deactivates when SOC reaches cutoff"""
+        mock_window.return_value = True
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 45, "power": 1000}  # Below cutoff
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "SELLING_FIRST"}
+            mock_client.set_work_mode.return_value = {"success": True}
+            mock_client.set_tou_settings.return_value = {"success": True}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                }
+            }
+            app_module.current_state = {
+                "mode": "SELLING_FIRST",
+                "force_discharge_active": True,
+                "soc": 75,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Should have deactivated force discharge
+            mock_client.set_work_mode.assert_called_with("ZERO_EXPORT_TO_CT")
