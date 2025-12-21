@@ -8,11 +8,11 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy application code
 COPY deye_client.py .
+COPY weather_client.py .
 COPY app.py .
 COPY templates/ ./templates/
 
-# Copy config (will be overwritten by volume mount)
-COPY config.json .
+# Config is provided via volume mount in docker-compose.yml
 
 # Expose port
 EXPOSE 7777
