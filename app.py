@@ -1,5 +1,6 @@
 import json
 import logging
+import requests
 import threading
 import time
 from datetime import datetime, timedelta
@@ -38,7 +39,8 @@ current_state = {
     "scheduler_status": "stopped",
     "weather_skip_active": False,
     "weather_skip_reason": None,
-    "free_energy_active": False
+    "free_energy_active": False,
+    "inverter_capacity": None  # Max discharge power in watts from API
 }
 weather_forecast_cache = {
     "forecast": None,
@@ -78,6 +80,9 @@ def init_client():
     )
     logger.info("Deye client initialised")
 
+    # Clear any previous errors on reinit
+    current_state["last_error"] = None
+
     # Fetch initial mode
     try:
         mode_data = client.get_work_mode()
@@ -89,6 +94,31 @@ def init_client():
                 logger.info(f"Initial work mode: {work_mode}")
     except Exception as e:
         logger.warning(f"Could not fetch initial work mode: {e}")
+
+    # Fetch inverter capacity and battery info
+    try:
+        battery_info = client.get_battery_info()
+        if battery_info.get("soc") is not None:
+            current_state["soc"] = battery_info["soc"]
+            logger.info(f"Initial SoC: {battery_info['soc']}%")
+        if battery_info.get("power") is not None:
+            current_state["battery_power"] = battery_info["power"]
+            logger.info(f"Initial battery power: {battery_info['power']}W")
+        if battery_info.get("inverter_capacity"):
+            current_state["inverter_capacity"] = battery_info["inverter_capacity"]
+            logger.info(f"Inverter capacity: {battery_info['inverter_capacity']}W")
+        else:
+            # Try dedicated method if not in battery_info
+            capacity = client.get_inverter_capacity()
+            if capacity:
+                current_state["inverter_capacity"] = capacity
+                logger.info(f"Inverter capacity: {capacity}W")
+            else:
+                current_state["inverter_capacity"] = 10000
+                logger.warning("Could not get inverter capacity from API, using default 10000W")
+    except Exception as e:
+        current_state["inverter_capacity"] = 10000
+        logger.warning(f"Could not fetch initial battery info: {e}")
 
 
 def init_weather_client():
@@ -135,23 +165,41 @@ def get_weather_forecast():
     if not weather_client or not weather_analyser:
         return None
 
-    # Check cache (update every 30 minutes)
+    # Check cache (update every 5 minutes - matches frontend refresh)
+    # 288 calls/day max, well under 1000/day API limit
     cache_age = None
     if weather_forecast_cache["last_update"]:
         cache_age = (datetime.now() - weather_forecast_cache["last_update"]).total_seconds()
 
-    if cache_age is None or cache_age > 1800:  # 30 minutes
+    if cache_age is None or cache_age > 300:  # 5 minutes
         try:
             forecast = weather_client.get_forecast()
-            # Get panel capacity for solar estimates (use panel if set, else inverter)
+            # Get panel capacity for solar estimates
+            # If panel capacity set, use it; otherwise assume panels are ~1.25x inverter capacity
             weather_config = config.get("weather", {})
             panel_kw = weather_config.get("panel_capacity_kw", 0)
             inverter_kw = weather_config.get("inverter_capacity_kw", 0)
-            capacity_kw = panel_kw if panel_kw > 0 else inverter_kw
-            forecast = weather_analyser.analyse_forecast(forecast, panel_capacity_kw=capacity_kw if capacity_kw > 0 else None)
+            # Also check inverter capacity from Deye API (stored in watts)
+            api_inverter_kw = (current_state.get("inverter_capacity") or 0) / 1000
+            if panel_kw > 0:
+                capacity_kw = panel_kw
+            elif inverter_kw > 0:
+                capacity_kw = inverter_kw * 1.25  # Typical panel oversizing ratio
+            elif api_inverter_kw > 0:
+                capacity_kw = api_inverter_kw * 1.25  # Use API inverter capacity with oversizing ratio
+            else:
+                capacity_kw = 0
+            logger.info(f"Solar capacity for forecast: {capacity_kw} kW (panel={panel_kw}, inverter_config={inverter_kw}, inverter_api={api_inverter_kw})")
+            # Pass weather_client for hourly solar calculations
+            forecast = weather_analyser.analyse_forecast(
+                forecast,
+                panel_capacity_kw=capacity_kw if capacity_kw > 0 else None,
+                weather_client=weather_client,
+                min_solar_threshold=weather_config.get("min_solar_threshold_kwh", 15)
+            )
             weather_forecast_cache["forecast"] = forecast
             weather_forecast_cache["last_update"] = datetime.now()
-            logger.info(f"Weather forecast updated: {forecast.get('consecutive_bad_days', 0)} consecutive bad days")
+            logger.info(f"Weather forecast updated successfully")
         except Exception as e:
             logger.error(f"Failed to fetch weather forecast: {e}")
             # Return cached data if available
@@ -276,7 +324,7 @@ def scheduler_loop():
             # Get SoC settings
             min_soc_reserve = schedule.get("min_soc_reserve", 20)
             cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
-            max_power = schedule.get("max_discharge_power", 10000)
+            max_power = current_state.get("inverter_capacity") or 10000
 
             # Get current battery info
             battery_info = client.get_battery_info()
@@ -284,6 +332,10 @@ def scheduler_loop():
             current_state["soc"] = soc
             current_state["battery_power"] = battery_info.get("power")
             current_state["last_check"] = datetime.now().isoformat()
+
+            # Clear any stale errors on successful data fetch
+            if soc is not None:
+                current_state["last_error"] = None
 
             in_window = is_within_discharge_window()
             in_free_energy_window = is_within_free_energy_window()
@@ -297,11 +349,13 @@ def scheduler_loop():
             # Get free energy TOU params
             free_energy_start, free_energy_end, free_energy_soc = get_free_energy_tou_params()
 
-            logger.info(f"Check: in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}, free_energy={in_free_energy_window}")
+            # Check if force discharge is enabled
+            force_discharge_enabled = schedule.get("enabled", True)
+            logger.info(f"Check: enabled={force_discharge_enabled}, in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}, free_energy={in_free_energy_window}")
 
             # Determine if we should be in force discharge mode
-            # Force discharge when: in window AND SoC above cutoff AND NOT weather skip
-            should_force_discharge = in_window and (soc is None or soc > cutoff_soc) and not weather_skip
+            # Force discharge when: enabled AND in window AND SoC above cutoff AND NOT weather skip
+            should_force_discharge = force_discharge_enabled and in_window and (soc is None or soc > cutoff_soc) and not weather_skip
 
             if weather_skip and in_window:
                 logger.info(f"Skipping discharge due to weather: {weather_reason}")
@@ -440,7 +494,7 @@ def test_deye_connection():
     """Test Deye API connection with provided credentials"""
     try:
         body = request.get_json()
-        
+
         test_client = DeyeCloudClient(
             api_base_url=body.get("api_base_url", "https://eu1-developer.deyecloud.com"),
             app_id=body.get("app_id"),
@@ -448,36 +502,50 @@ def test_deye_connection():
             email=body.get("email"),
             password=body.get("password")
         )
-        
-        # Try to get device info to validate connection
+
+        # Device SN is required
         device_sn = body.get("device_sn")
-        if device_sn:
-            device_info = test_client.get_device_info(device_sn)
-            if device_info:
+        if not device_sn:
+            return jsonify({
+                "success": False,
+                "error": "Device serial number is required"
+            })
+
+        # Set device_sn on client and test with get_device_latest_data
+        test_client.device_sn = device_sn
+        result = test_client.get_device_latest_data()
+
+        # Check response
+        if result.get("code") in [0, "0", 1000000] or result.get("success") == True:
+            device_list = result.get("deviceDataList", [])
+            if device_list:
                 return jsonify({
                     "success": True,
                     "message": "Connection successful! Device found.",
-                    "device_name": device_info.get("deviceName", "Unknown")
+                    "device_name": device_list[0].get("deviceName") or device_sn
                 })
             else:
                 return jsonify({
                     "success": False,
-                    "error": "Device not found. Please check the serial number."
+                    "error": "Device not found or no data available. Check the serial number."
                 })
         else:
-            # Just test authentication
             return jsonify({
-                "success": True,
-                "message": "Authentication successful!"
+                "success": False,
+                "error": f"API error: {result.get('msg', 'Unknown error')}"
             })
-            
-    except Exception as e:
-        error_msg = str(e)
-        if "401" in error_msg or "unauthorized" in error_msg.lower():
-            error_msg = "Authentication failed. Please check your credentials."
-        elif "404" in error_msg:
-            error_msg = "API endpoint not found. Please check the API base URL."
+
+    except requests.exceptions.HTTPError as e:
+        status_code = e.response.status_code if e.response else "unknown"
+        if status_code == 401:
+            error_msg = "Authentication failed. Check your App ID, App Secret, email and password."
+        elif status_code == 404:
+            error_msg = f"API endpoint not found (404). Check the API base URL is correct for your region."
+        else:
+            error_msg = f"HTTP error {status_code}: {str(e)}"
         return jsonify({"success": False, "error": error_msg})
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
 
 
 @app.route('/api/setup/test-weather', methods=['POST'])
@@ -508,43 +576,81 @@ def test_weather_connection():
         return jsonify({"success": False, "error": str(e)})
 
 
+@app.route('/api/setup/search-cities')
+def setup_search_cities():
+    """Search for cities during setup using provided API key"""
+    query = request.args.get('q', '')
+    api_key = request.args.get('api_key', '')
+
+    if len(query) < 3:
+        return jsonify({"success": True, "cities": []})
+
+    if not api_key:
+        return jsonify({"success": False, "error": "API key required", "cities": []})
+
+    cities = WeatherClient.search_cities(api_key, query)
+    return jsonify({"success": True, "cities": cities})
+
+
 @app.route('/api/setup/complete', methods=['POST'])
 def complete_setup():
     """Save initial setup configuration"""
     global client, weather_client, weather_analyser
-    
+
     try:
         body = request.get_json()
-        
+
         # Update Deye config
         if "deye" in body:
             deye_data = body["deye"]
             if "deye" not in config:
                 config["deye"] = {}
-            
+
             for key in ["api_base_url", "app_id", "app_secret", "email", "password", "device_sn"]:
                 if key in deye_data:
                     config["deye"][key] = deye_data[key]
-        
+
         # Update Weather config
         if "weather" in body:
             weather_data = body["weather"]
             if "weather" not in config:
                 config["weather"] = {}
-            
-            for key in ["enabled", "api_key", "city_name",
-                       "inverter_capacity_kw", "panel_capacity_kw"]:
+
+            for key in ["enabled", "api_key", "city_name"]:
                 if key in weather_data:
                     config["weather"][key] = weather_data[key]
-        
+
+            # Enable weather if API key provided
+            if weather_data.get("api_key"):
+                config["weather"]["enabled"] = True
+
+        # Update solar capacity (can come from weather or solar object)
+        if "solar" in body:
+            solar_data = body["solar"]
+            if "weather" not in config:
+                config["weather"] = {}
+            if solar_data.get("inverter_capacity_kw"):
+                config["weather"]["inverter_capacity_kw"] = solar_data["inverter_capacity_kw"]
+            if solar_data.get("panel_capacity_kw"):
+                config["weather"]["panel_capacity_kw"] = solar_data["panel_capacity_kw"]
+
+        # Set sensible defaults for weather settings
+        if "weather" in config:
+            if "min_solar_threshold_kwh" not in config["weather"]:
+                config["weather"]["min_solar_threshold_kwh"] = 15
+
         save_config()
-        
+
+        # Clear weather cache to apply new capacity settings
+        weather_forecast_cache["forecast"] = None
+        weather_forecast_cache["last_update"] = None
+
         # Reinitialize clients
-        init_deye_client()
+        init_client()
         init_weather_client()
-        
+
         return jsonify({"success": True, "message": "Setup completed successfully!"})
-        
+
     except Exception as e:
         return jsonify({"success": False, "error": str(e)})
 
@@ -681,7 +787,7 @@ def update_config():
             schedule = config.get("schedule", {})
             min_soc_reserve = schedule.get("min_soc_reserve", 20)
             cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
-            max_power = schedule.get("max_discharge_power", 10000)
+            max_power = current_state.get("inverter_capacity") or 10000
             window_start = schedule.get("force_discharge_start", "17:30")
             window_end = schedule.get("force_discharge_end", "19:30")
 
@@ -893,7 +999,7 @@ def update_free_energy_config():
             schedule = config.get("schedule", {})
             min_soc_reserve = schedule.get("min_soc_reserve", 20)
             cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
-            max_power = schedule.get("max_discharge_power", 10000)
+            max_power = current_state.get("inverter_capacity") or 10000
             window_start = schedule.get("force_discharge_start", "17:30")
             window_end = schedule.get("force_discharge_end", "19:30")
 

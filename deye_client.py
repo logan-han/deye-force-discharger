@@ -11,7 +11,7 @@ class DeyeCloudClient:
     """Client for Deye Cloud API"""
 
     def __init__(self, api_base_url: str, app_id: str, app_secret: str,
-                 email: str, password: str, device_sn: str):
+                 email: str, password: str, device_sn: str = None):
         self.api_base_url = api_base_url.rstrip('/')
         self.app_id = app_id
         self.app_secret = app_secret
@@ -35,8 +35,11 @@ class DeyeCloudClient:
         }
         params = {"appId": self.app_id}
 
-        logger.info("Requesting new access token")
+        logger.info(f"Requesting new access token from {url}")
         response = requests.post(url, json=payload, params=params, timeout=30)
+        logger.info(f"Token response status: {response.status_code}")
+        if response.status_code != 200:
+            logger.error(f"Token request failed: {response.status_code} - {response.text[:500]}")
         response.raise_for_status()
 
         data = response.json()
@@ -76,13 +79,16 @@ class DeyeCloudClient:
             "Content-Type": "application/json"
         }
 
-        logger.debug(f"Making {method} request to {url}")
+        logger.info(f"Making {method} request to {url}")
 
         if method.upper() == "GET":
             response = requests.get(url, headers=headers, params=payload, timeout=30)
         else:
             response = requests.post(url, headers=headers, json=payload, timeout=30)
 
+        logger.info(f"Response status: {response.status_code}")
+        if response.status_code != 200:
+            logger.error(f"Request failed: {response.status_code} - {response.text[:500]}")
         response.raise_for_status()
         return response.json()
 
@@ -93,10 +99,10 @@ class DeyeCloudClient:
             "size": 100
         })
 
-    def get_device_info(self) -> Dict[str, Any]:
+    def get_device_info(self, device_sn: str = None) -> Dict[str, Any]:
         """Get device information"""
-        return self._make_request("POST", "/v1.0/device", {
-            "deviceSn": self.device_sn
+        return self._make_request("POST", "/v1.0/device/info", {
+            "deviceSn": device_sn or self.device_sn
         })
 
     def get_device_latest_data(self) -> Dict[str, Any]:
@@ -317,3 +323,29 @@ class DeyeCloudClient:
     def get_soc(self) -> Optional[float]:
         """Get current State of Charge percentage"""
         return self.get_battery_info().get("soc")
+
+    def get_inverter_capacity(self) -> Optional[int]:
+        """Get inverter max discharge capacity in watts from device data"""
+        try:
+            data = self.get_device_latest_data()
+            if data.get("success") or data.get("code") == 1000000:
+                device_data_list = data.get("deviceDataList", [])
+                if device_data_list:
+                    device_data = device_data_list[0]
+                    data_list = device_data.get("dataList", [])
+
+                    for item in data_list:
+                        key = (item.get("key") or "").upper()
+                        value = item.get("value")
+                        # Look for inverter rated power key
+                        if key in ["RATEDPOWER", "RATED_POWER", "INVERTERPOWER", "MAXPOWER"]:
+                            return int(float(value)) if value else None
+
+                    # If not found in dataList, check device attributes
+                    rated_power = device_data.get("ratedPower") or device_data.get("rated_power")
+                    if rated_power:
+                        return int(float(rated_power))
+
+        except Exception as e:
+            logger.error(f"Failed to get inverter capacity: {e}")
+        return None

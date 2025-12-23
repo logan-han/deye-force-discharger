@@ -8,6 +8,7 @@
     "device_sn": "YOUR_DEVICE_SN"
   },
   "schedule": {
+    "enabled": true,
     "force_discharge_start": "17:30",
     "force_discharge_end": "19:30",
     "min_soc_reserve": 20,

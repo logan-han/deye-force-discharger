@@ -163,7 +163,9 @@
         .tou-status.off { background: rgba(233, 69, 96, 0.2); color: #e94560; }
         .tou-target { background: rgba(78, 204, 163, 0.1); }
         .tou-target td:first-child { color: #4ecca3; font-weight: 600; }
-        .tou-legend { font-size: 0.65rem; color: #4ecca3; margin-top: 8px; text-align: right; }
+        .tou-free-energy { background: rgba(52, 152, 219, 0.1); }
+        .tou-free-energy td:first-child { color: #3498db; font-weight: 600; }
+        .tou-legend { font-size: 0.65rem; color: #888; margin-top: 8px; text-align: right; }
 
         /* Settings */
         .settings-top-row {
@@ -207,13 +209,52 @@
             font-size: 0.85rem;
         }
         .setting-item input:focus { outline: none; border-color: #4ecca3; }
-        .scheduler-group {
-            flex-shrink: 0;
+        /* Schedule Settings Grid */
+        .schedule-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
         }
-        .scheduler-content {
+        @media (max-width: 600px) {
+            .schedule-grid { grid-template-columns: 1fr; }
+        }
+        .schedule-section {
+            background: #1a1a2e;
+            padding: 12px;
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+        }
+        .schedule-section-title {
+            font-size: 0.8rem;
+            color: #4ecca3;
+            margin-bottom: 10px;
+            font-weight: 500;
+        }
+        .schedule-form { display: flex; flex-direction: column; gap: 8px; flex: 1; justify-content: space-between; }
+        .schedule-row {
+            display: flex;
+            gap: 8px;
+        }
+        .schedule-row .setting-item { flex: 1; min-width: 60px; }
+        .schedule-row .setting-item input { padding: 5px 6px; font-size: 0.8rem; }
+        .scheduler-section {
+            margin-top: 15px;
+            padding-top: 15px;
+            border-top: 1px solid #2a3f5f;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .scheduler-header {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
+        }
+        .scheduler-label {
+            font-size: 0.75rem;
+            color: #888;
+            text-transform: uppercase;
         }
         .scheduler-status { font-size: 0.9rem; font-weight: bold; white-space: nowrap; }
         .scheduler-status.running { color: #4ecca3; }
@@ -609,10 +650,16 @@
 
                 <div id="weatherTestResult" class="test-result" style="display: none;"></div>
 
+                <div class="setup-field" id="setupCityField" style="display: none; position: relative;">
+                    <label>Your Location</label>
+                    <input type="text" id="setupCitySearch" placeholder="Type at least 3 characters..." autocomplete="off">
+                    <input type="hidden" id="setupCityName">
+                    <div id="setupCityDropdown" class="city-dropdown"></div>
+                </div>
+
                 <div class="setup-buttons">
                     <button type="button" class="btn btn-secondary" onclick="goToStep(1)">Back</button>
-                    <button type="button" class="btn btn-secondary" onclick="testWeatherConnection()">Test API Key</button>
-                    <button type="button" class="btn btn-primary" onclick="goToStep(3)">Next</button>
+                    <button type="button" class="btn btn-primary" id="setupWeatherNextBtn" onclick="goToStep(3)">Skip</button>
                 </div>
             </div>
 
@@ -699,6 +746,18 @@
                 </div>
             </div>
             <div id="errorMsg" class="error-msg" style="display: none;"></div>
+
+            <!-- Scheduler Controls -->
+            <div class="scheduler-section">
+                <div class="scheduler-header">
+                    <span class="scheduler-label">Scheduler</span>
+                    <span class="scheduler-status" id="schedulerStatusLarge">STOPPED</span>
+                </div>
+                <div class="scheduler-buttons">
+                    <button type="button" class="btn btn-sm btn-primary" id="startBtn" onclick="startScheduler()">Start</button>
+                    <button type="button" class="btn btn-sm btn-danger" id="stopBtn" onclick="stopScheduler()">Stop</button>
+                </div>
+            </div>
         </div>
 
         <!-- TOU Settings -->
@@ -717,7 +776,7 @@
                     <tr><td colspan="4" style="text-align: center; color: #888;">Loading...</td></tr>
                 </tbody>
             </table>
-            <div class="tou-legend">* Force discharge window</div>
+            <div class="tou-legend">💰 Force discharge &nbsp; ⚡ Free energy</div>
         </div>
 
         <!-- Weather Forecast -->
@@ -741,18 +800,14 @@
                     <div class="weather-settings-row">
                         <div class="setting-item" style="flex: 2; position: relative;">
                             <label>City</label>
-                            <input type="text" id="weatherCity" placeholder="Search city..." autocomplete="off">
+                            <input type="text" id="weatherCity" placeholder="Type 3+ chars to search..." autocomplete="off">
                             <input type="hidden" id="weatherCityName">
                             <div id="cityDropdown" class="city-dropdown"></div>
                         </div>
                         <div class="setting-item">
                             <label>Min Solar Threshold (kWh)</label>
-                            <input type="number" id="weatherSolarThreshold" min="0" max="50" step="0.5" value="0">
+                            <input type="number" id="weatherSolarThreshold" min="0" max="100" step="1" value="15">
                             <small style="color: #666; font-size: 0.8em;">Skip discharge if tomorrow's forecast is below this</small>
-                        </div>
-                        <div class="setting-item">
-                            <label>Cloud Cover %</label>
-                            <input type="number" id="weatherCloudCover" min="0" max="100" value="70">
                         </div>
                     </div>
                     <div class="weather-settings-row">
@@ -776,96 +831,69 @@
             </div>
         </div>
 
-        <!-- Free Energy Window -->
-        <div class="card" id="freeEnergyCard">
-            <h2>
-                Free Energy Window
-                <span class="weather-settings-toggle" onclick="toggleFreeEnergySettings()">Settings</span>
-            </h2>
-            <div id="freeEnergyContent">
-                <div class="weather-disabled">Loading free energy settings...</div>
-            </div>
-            <div class="weather-settings" id="freeEnergySettings">
-                <form id="freeEnergySettingsForm">
-                    <div class="weather-settings-row">
-                        <div class="setting-item">
-                            <label>
-                                <input type="checkbox" id="freeEnergyEnabled"> Enable Free Energy Window
-                            </label>
-                        </div>
-                    </div>
-                    <div class="weather-settings-row">
-                        <div class="setting-item">
-                            <label>Start Time</label>
-                            <input type="time" id="freeEnergyStart" value="11:00">
-                        </div>
-                        <div class="setting-item">
-                            <label>End Time</label>
-                            <input type="time" id="freeEnergyEnd" value="14:00">
-                        </div>
-                        <div class="setting-item">
-                            <label>Target SoC (%)</label>
-                            <input type="number" id="freeEnergyTargetSoc" min="50" max="100" value="100">
-                        </div>
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-sm">Save & Update Inverter</button>
-                </form>
-            </div>
-        </div>
-
-        <!-- Settings & Scheduler -->
+        <!-- Schedule Settings -->
         <div class="card">
-            <h2>Settings</h2>
-            <form id="scheduleForm">
-                <div class="settings-top-row">
-                    <div class="settings-inputs">
-                        <div class="settings-group">
-                            <div class="settings-group-label">Discharge Window</div>
-                            <div class="settings-inline">
-                                <div class="setting-item">
-                                    <label>Start</label>
-                                    <input type="time" id="startTime" value="17:30">
-                                </div>
-                                <div class="setting-item">
-                                    <label>End</label>
-                                    <input type="time" id="endTime" value="19:30">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="settings-group">
-                            <div class="settings-group-label">Battery SoC Limits (%)</div>
-                            <div class="settings-inline">
-                                <div class="setting-item">
-                                    <label>Normal</label>
-                                    <input type="number" id="minSocReserve" min="5" max="100" value="20">
-                                </div>
-                                <div class="setting-item">
-                                    <label>Discharge</label>
-                                    <input type="number" id="cutoffSoc" min="5" max="100" value="50">
-                                </div>
-                            </div>
-                        </div>
-                        <div class="settings-group">
-                            <div class="settings-group-label">Power</div>
+            <h2>Schedule Settings</h2>
+            <div class="schedule-grid">
+                <!-- Force Discharge Window -->
+                <div class="schedule-section">
+                    <div class="schedule-section-title">
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" id="forceDischargeEnabled" checked>
+                            💰 Force Discharge
+                        </label>
+                    </div>
+                    <form id="scheduleForm" class="schedule-form">
+                        <div class="schedule-row">
                             <div class="setting-item">
-                                <label>Max (W)</label>
-                                <input type="number" id="maxPowerInput" min="0" max="20000" value="10000">
+                                <label>Start</label>
+                                <input type="time" id="startTime" value="17:30">
+                            </div>
+                            <div class="setting-item">
+                                <label>End</label>
+                                <input type="time" id="endTime" value="19:30">
                             </div>
                         </div>
-                    </div>
-                    <div class="settings-group scheduler-group">
-                        <div class="settings-group-label">Scheduler</div>
-                        <div class="scheduler-content">
-                            <span class="scheduler-status" id="schedulerStatusLarge">STOPPED</span>
-                            <div class="scheduler-buttons">
-                                <button type="button" class="btn btn-sm btn-primary" id="startBtn" onclick="startScheduler()">Start</button>
-                                <button type="button" class="btn btn-sm btn-danger" id="stopBtn" onclick="stopScheduler()">Stop</button>
+                        <div class="schedule-row">
+                            <div class="setting-item">
+                                <label>Normal SoC %</label>
+                                <input type="number" id="minSocReserve" min="5" max="100" value="20" title="Outside discharge window - battery reserve for normal use">
+                            </div>
+                            <div class="setting-item">
+                                <label>Discharge SoC %</label>
+                                <input type="number" id="cutoffSoc" min="5" max="100" value="50" title="During discharge window - stop when battery reaches this level">
                             </div>
                         </div>
-                    </div>
+                        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                    </form>
                 </div>
-                <button type="submit" class="btn btn-primary btn-save">Save & Update Inverter</button>
-            </form>
+                <!-- Free Energy Window -->
+                <div class="schedule-section" id="freeEnergyCard">
+                    <div class="schedule-section-title">
+                        <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                            <input type="checkbox" id="freeEnergyEnabled">
+                            ⚡ Free Energy Charge
+                        </label>
+                    </div>
+                    <form id="freeEnergySettingsForm" class="schedule-form">
+                        <div class="schedule-row">
+                            <div class="setting-item">
+                                <label>Start</label>
+                                <input type="time" id="freeEnergyStart" value="11:00">
+                            </div>
+                            <div class="setting-item">
+                                <label>End</label>
+                                <input type="time" id="freeEnergyEnd" value="14:00">
+                            </div>
+                            <div class="setting-item">
+                                <label>Target SoC</label>
+                                <input type="number" id="freeEnergyTargetSoc" min="50" max="100" value="100">
+                            </div>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm">Save</button>
+                    </form>
+                </div>
+            </div>
         </div>
 
         <!-- Status Footer -->
@@ -881,6 +909,225 @@
         let refreshInterval;
         let maxPower = 10000;
         let isEditingSettings = false;
+
+        // Setup wizard functions
+        async function checkSetupStatus() {
+            try {
+                const response = await fetch('/api/setup/status');
+                const data = await response.json();
+                if (data.needs_setup) {
+                    document.getElementById('setupOverlay').style.display = 'flex';
+                }
+            } catch (error) {
+                console.error('Error checking setup status:', error);
+            }
+        }
+
+        function goToStep(step) {
+            // Hide all steps
+            document.querySelectorAll('.setup-step').forEach(s => s.classList.remove('active'));
+            document.querySelectorAll('.progress-dot').forEach(d => d.classList.remove('active', 'completed'));
+
+            // Show target step
+            document.getElementById(`setupStep${step}`).classList.add('active');
+
+            // Update progress dots
+            for (let i = 1; i <= 3; i++) {
+                const dot = document.getElementById(`dot${i}`);
+                if (i < step) {
+                    dot.classList.add('completed');
+                } else if (i === step) {
+                    dot.classList.add('active');
+                }
+            }
+        }
+
+        async function testDeyeConnection() {
+            const resultEl = document.getElementById('deyeTestResult');
+            resultEl.style.display = 'block';
+            resultEl.className = 'test-result';
+            resultEl.textContent = 'Testing connection...';
+
+            const payload = {
+                api_base_url: document.getElementById('setupApiUrl').value,
+                app_id: document.getElementById('setupAppId').value,
+                app_secret: document.getElementById('setupAppSecret').value,
+                email: document.getElementById('setupEmail').value,
+                password: document.getElementById('setupPassword').value,
+                device_sn: document.getElementById('setupDeviceSn').value
+            };
+
+            try {
+                const response = await fetch('/api/setup/test-deye', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.className = 'test-result success';
+                    resultEl.textContent = `Connected! Device: ${data.device_name || 'Found'}`;
+                } else {
+                    resultEl.className = 'test-result error';
+                    resultEl.textContent = `Error: ${data.error}`;
+                }
+            } catch (error) {
+                resultEl.className = 'test-result error';
+                resultEl.textContent = `Connection failed: ${error.message}`;
+            }
+        }
+
+        // Setup wizard - auto-test weather API key
+        let setupWeatherKeyTimeout;
+        let setupCityApiKey = '';
+        let setupCitySearchInitialized = false;
+
+        document.getElementById('setupWeatherKey').addEventListener('input', (e) => {
+            clearTimeout(setupWeatherKeyTimeout);
+            const apiKey = e.target.value.trim();
+            const resultEl = document.getElementById('weatherTestResult');
+            const nextBtn = document.getElementById('setupWeatherNextBtn');
+
+            if (!apiKey) {
+                resultEl.style.display = 'none';
+                document.getElementById('setupCityField').style.display = 'none';
+                nextBtn.textContent = 'Skip';
+                return;
+            }
+
+            // Auto-test after 800ms of no typing
+            setupWeatherKeyTimeout = setTimeout(() => testWeatherKey(apiKey), 800);
+        });
+
+        async function testWeatherKey(apiKey) {
+            const resultEl = document.getElementById('weatherTestResult');
+            const nextBtn = document.getElementById('setupWeatherNextBtn');
+
+            resultEl.style.display = 'block';
+            resultEl.className = 'test-result';
+            resultEl.textContent = 'Validating API key...';
+
+            try {
+                const response = await fetch('/api/setup/test-weather', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ api_key: apiKey })
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    resultEl.className = 'test-result success';
+                    resultEl.textContent = 'API key valid! Search for your location:';
+                    document.getElementById('setupCityField').style.display = 'block';
+                    nextBtn.textContent = 'Next';
+                    setupCityApiKey = apiKey;
+                    if (!setupCitySearchInitialized) {
+                        initSetupCitySearch();
+                        setupCitySearchInitialized = true;
+                    }
+                } else {
+                    resultEl.className = 'test-result error';
+                    resultEl.textContent = `Invalid: ${data.error}`;
+                    document.getElementById('setupCityField').style.display = 'none';
+                    nextBtn.textContent = 'Skip';
+                }
+            } catch (error) {
+                resultEl.className = 'test-result error';
+                resultEl.textContent = `Error: ${error.message}`;
+                document.getElementById('setupCityField').style.display = 'none';
+                nextBtn.textContent = 'Skip';
+            }
+        }
+
+        // Setup wizard city search
+        let setupCitySearchTimeout;
+        function initSetupCitySearch() {
+            const input = document.getElementById('setupCitySearch');
+            const dropdown = document.getElementById('setupCityDropdown');
+
+            input.addEventListener('input', async (e) => {
+                clearTimeout(setupCitySearchTimeout);
+                const query = e.target.value.trim();
+
+                if (query.length < 3) {
+                    dropdown.classList.remove('show');
+                    return;
+                }
+
+                setupCitySearchTimeout = setTimeout(async () => {
+                    try {
+                        const response = await fetch(`/api/setup/search-cities?q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(setupCityApiKey)}`);
+                        const data = await response.json();
+
+                        if (data.success && data.cities.length > 0) {
+                            dropdown.innerHTML = data.cities.map(city =>
+                                `<div class="city-option" data-name="${city.display_name}">${city.display_name}</div>`
+                            ).join('');
+                            dropdown.classList.add('show');
+                        } else {
+                            dropdown.classList.remove('show');
+                        }
+                    } catch (error) {
+                        console.error('City search error:', error);
+                        dropdown.classList.remove('show');
+                    }
+                }, 300);
+            });
+
+            dropdown.addEventListener('click', (e) => {
+                if (e.target.classList.contains('city-option')) {
+                    const cityName = e.target.dataset.name;
+                    document.getElementById('setupCitySearch').value = cityName;
+                    document.getElementById('setupCityName').value = cityName;
+                    dropdown.classList.remove('show');
+                }
+            });
+        }
+
+        async function completeSetup() {
+            const payload = {
+                deye: {
+                    api_base_url: document.getElementById('setupApiUrl').value,
+                    app_id: document.getElementById('setupAppId').value,
+                    app_secret: document.getElementById('setupAppSecret').value,
+                    email: document.getElementById('setupEmail').value,
+                    password: document.getElementById('setupPassword').value,
+                    device_sn: document.getElementById('setupDeviceSn').value
+                },
+                weather: {
+                    api_key: document.getElementById('setupWeatherKey').value || '',
+                    city_name: document.getElementById('setupCityName').value || ''
+                },
+                solar: {
+                    inverter_capacity_kw: parseFloat(document.getElementById('setupInverterCapacity').value) || 0,
+                    panel_capacity_kw: parseFloat(document.getElementById('setupPanelCapacity').value) || 0
+                }
+            };
+
+            try {
+                const response = await fetch('/api/setup/complete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    document.getElementById('setupOverlay').style.display = 'none';
+                    showToast('Setup complete!');
+                    refreshStatus();
+                    refreshWeather();
+                } else {
+                    showToast(`Setup failed: ${data.error}`, 'error');
+                }
+            } catch (error) {
+                showToast(`Setup failed: ${error.message}`, 'error');
+            }
+        }
+
+        // Check setup status on page load
+        checkSetupStatus();
 
         function showToast(message, type = 'success') {
             const toast = document.getElementById('toast');
@@ -905,7 +1152,7 @@
                 label.textContent = '-- W';
                 value.textContent = '-- kW';
                 directionEl.textContent = '--';
-                directionEl.style.color = '#4ecca3';
+                directionEl.style.color = '#888';
                 return;
             }
 
@@ -915,26 +1162,37 @@
             const isDischarging = power > 0;
 
             gauge.style.width = `${percent}%`;
-            gauge.style.background = isDischarging
-                ? 'linear-gradient(90deg, #4ecca3, #ffc107)'
-                : 'linear-gradient(90deg, #3498db, #9b59b6)';
-            label.textContent = `${Math.round(absPower)} W`;
-            value.textContent = `${(absPower / 1000).toFixed(2)} kW`;
-            value.style.color = isDischarging ? '#4ecca3' : '#3498db';
 
             if (isDischarging) {
-                directionEl.textContent = 'DISCHARGING';
-                directionEl.style.color = '#4ecca3';
+                // Discharging: orange/amber gradient - power going OUT
+                gauge.style.background = 'linear-gradient(90deg, #ff9800, #f44336)';
+                label.textContent = `↓ ${Math.round(absPower)} W`;
+                label.style.color = '#fff';
+                value.textContent = `${(absPower / 1000).toFixed(2)} kW`;
+                value.style.color = '#ff9800';
+                directionEl.textContent = '↓ DISCHARGING';
+                directionEl.style.color = '#ff9800';
             } else if (isCharging) {
-                directionEl.textContent = 'CHARGING';
-                directionEl.style.color = '#3498db';
+                // Charging: green/blue gradient - power coming IN
+                gauge.style.background = 'linear-gradient(90deg, #4ecca3, #3498db)';
+                label.textContent = `↑ ${Math.round(absPower)} W`;
+                label.style.color = '#fff';
+                value.textContent = `${(absPower / 1000).toFixed(2)} kW`;
+                value.style.color = '#4ecca3';
+                directionEl.textContent = '↑ CHARGING';
+                directionEl.style.color = '#4ecca3';
             } else {
+                gauge.style.background = '#2a3f5f';
+                label.textContent = '0 W';
+                label.style.color = '#888';
+                value.textContent = '0 kW';
+                value.style.color = '#888';
                 directionEl.textContent = 'IDLE';
                 directionEl.style.color = '#888';
             }
         }
 
-        function updateTouTable(touSettings, windowStart) {
+        function updateTouTable(touSettings, windowStart, freeEnergy) {
             const tbody = document.getElementById('touTableBody');
 
             if (!touSettings) {
@@ -951,18 +1209,30 @@
             const sortedItems = [...items].sort((a, b) => (a.time || '').localeCompare(b.time || ''));
             // Normalize window start for comparison (remove colon)
             const windowStartNorm = windowStart.replace(':', '');
+            const freeEnergyStartNorm = freeEnergy && freeEnergy.enabled ? (freeEnergy.start_time || '').replace(':', '') : '';
 
             tbody.innerHTML = sortedItems.map((item, index) => {
                 const startTime = item.time || '--';
                 const nextIndex = (index + 1) % sortedItems.length;
                 const endTime = sortedItems[nextIndex].time || '--';
 
-                // Check if this is target window (compare without colon)
-                const isTarget = startTime.replace(':', '') === windowStartNorm;
+                // Check if this is force discharge window
+                const isDischargeWindow = startTime.replace(':', '') === windowStartNorm;
+                // Check if this is free energy window
+                const isFreeEnergyWindow = freeEnergyStartNorm && startTime.replace(':', '') === freeEnergyStartNorm;
 
-                const timeDisplay = isTarget ? `* ${startTime} - ${endTime}` : `${startTime} - ${endTime}`;
+                let timeDisplay = `${startTime} - ${endTime}`;
+                let rowClass = '';
+                if (isDischargeWindow) {
+                    timeDisplay = `💰 ${startTime} - ${endTime}`;
+                    rowClass = 'tou-target';
+                } else if (isFreeEnergyWindow) {
+                    timeDisplay = `⚡ ${startTime} - ${endTime}`;
+                    rowClass = 'tou-free-energy';
+                }
+
                 return `
-                    <tr class="${isTarget ? 'tou-target' : ''}">
+                    <tr class="${rowClass}">
                         <td>${timeDisplay}</td>
                         <td>${item.soc !== undefined ? item.soc + '%' : '--'}</td>
                         <td>${item.power || '--'}</td>
@@ -995,8 +1265,8 @@
                 const state = data.current_state;
                 const schedule = data.schedule;
 
-                // Update max power
-                maxPower = schedule.max_discharge_power || 10000;
+                // Update max power from inverter capacity
+                maxPower = state.inverter_capacity || 10000;
                 document.getElementById('maxPowerDisplay').textContent = (maxPower / 1000).toFixed(0);
 
                 // SoC
@@ -1073,15 +1343,15 @@
 
                 // Update form only if user is not actively editing
                 if (!isEditingSettings) {
+                    document.getElementById('forceDischargeEnabled').checked = schedule.enabled !== false;
                     document.getElementById('startTime').value = schedule.force_discharge_start || '17:30';
                     document.getElementById('endTime').value = schedule.force_discharge_end || '19:30';
                     document.getElementById('minSocReserve').value = schedule.min_soc_reserve || 20;
                     document.getElementById('cutoffSoc').value = schedule.force_discharge_cutoff_soc || 50;
-                    document.getElementById('maxPowerInput').value = schedule.max_discharge_power || 10000;
                 }
 
                 // TOU table
-                updateTouTable(data.tou_settings, schedule.force_discharge_start || '17:30');
+                updateTouTable(data.tou_settings, schedule.force_discharge_start || '17:30', data.free_energy);
 
             } catch (error) {
                 console.error('Error:', error);
@@ -1115,11 +1385,11 @@
         document.getElementById('scheduleForm').addEventListener('submit', async (e) => {
             e.preventDefault();
             const schedule = {
+                enabled: document.getElementById('forceDischargeEnabled').checked,
                 force_discharge_start: document.getElementById('startTime').value,
                 force_discharge_end: document.getElementById('endTime').value,
                 min_soc_reserve: parseInt(document.getElementById('minSocReserve').value),
-                force_discharge_cutoff_soc: parseInt(document.getElementById('cutoffSoc').value),
-                max_discharge_power: parseInt(document.getElementById('maxPowerInput').value)
+                force_discharge_cutoff_soc: parseInt(document.getElementById('cutoffSoc').value)
             };
 
             try {
@@ -1283,10 +1553,9 @@
                 document.getElementById('weatherEnabled').checked = config.enabled;
                 document.getElementById('weatherCityName').value = config.city_name || '';
                 document.getElementById('weatherCity').value = config.city_name || '';
-                document.getElementById('weatherSolarThreshold').value = config.min_solar_threshold_kwh || 0;
-                document.getElementById('weatherCloudCover').value = config.min_cloud_cover_percent || 70;
-                document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || 0;
-                document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || 0;
+                document.getElementById('weatherSolarThreshold').value = config.min_solar_threshold_kwh || 15;
+                document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || '';
+                document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || '';
             } catch (error) {
                 console.error('Error loading weather config:', error);
             }
@@ -1299,8 +1568,8 @@
             clearTimeout(citySearchTimeout);
             const query = e.target.value.trim();
             const dropdown = document.getElementById('cityDropdown');
-            
-            if (query.length < 2) {
+
+            if (query.length < 3) {
                 dropdown.classList.remove('show');
                 return;
             }
@@ -1353,8 +1622,7 @@
             const payload = {
                 enabled: document.getElementById('weatherEnabled').checked,
                 city_name: document.getElementById('weatherCityName').value || '',
-                min_solar_threshold_kwh: parseFloat(document.getElementById('weatherSolarThreshold').value) || 0,
-                min_cloud_cover_percent: parseInt(document.getElementById('weatherCloudCover').value) || 70,
+                min_solar_threshold_kwh: parseFloat(document.getElementById('weatherSolarThreshold').value) || 15,
                 inverter_capacity_kw: parseFloat(document.getElementById('weatherInverterCapacity').value) || 0,
                 panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0
             };
@@ -1391,51 +1659,6 @@
         setInterval(refreshWeather, 300000);
 
         // Free Energy functionality
-        function renderFreeEnergyContent(data) {
-            const container = document.getElementById('freeEnergyContent');
-
-            if (!data.enabled) {
-                container.innerHTML = `
-                    <div class="weather-disabled">
-                        Free Energy Window is disabled.<br>
-                        <small>Enable this if your power company offers free energy during certain hours.</small>
-                    </div>
-                `;
-                return;
-            }
-
-            // Show current settings and status
-            const startTime = data.start_time || '11:00';
-            const endTime = data.end_time || '14:00';
-            const targetSoc = data.target_soc || 100;
-            const isActive = data.active;
-
-            let bannerHtml = '';
-            if (isActive) {
-                bannerHtml = `
-                    <div class="weather-skip-banner inactive">
-                        <span class="weather-skip-icon">⚡</span>
-                        <div class="weather-skip-text">
-                            <div class="title" style="color: #4ecca3;">Grid Charging Active</div>
-                            <div class="reason">Charging battery to ${targetSoc}% from free grid energy</div>
-                        </div>
-                    </div>
-                `;
-            } else {
-                bannerHtml = `
-                    <div class="weather-skip-banner" style="background: rgba(78, 204, 163, 0.1); border-color: #2a3f5f;">
-                        <span class="weather-skip-icon">⏰</span>
-                        <div class="weather-skip-text">
-                            <div class="title" style="color: #888;">Waiting for Free Energy Window</div>
-                            <div class="reason">Grid charging: ${startTime} - ${endTime} (Target: ${targetSoc}% SoC)</div>
-                        </div>
-                    </div>
-                `;
-            }
-
-            container.innerHTML = bannerHtml;
-        }
-
         async function loadFreeEnergyConfig() {
             try {
                 const response = await fetch('/api/free-energy/config');
@@ -1450,28 +1673,8 @@
             }
         }
 
-        function toggleFreeEnergySettings() {
-            const settings = document.getElementById('freeEnergySettings');
-            settings.classList.toggle('show');
-            if (settings.classList.contains('show')) {
-                loadFreeEnergyConfig();
-            }
-        }
-
-        async function refreshFreeEnergy() {
-            try {
-                const response = await fetch('/api/status');
-                const data = await response.json();
-                if (data.free_energy) {
-                    renderFreeEnergyContent(data.free_energy);
-                }
-            } catch (error) {
-                console.error('Free energy fetch error:', error);
-                document.getElementById('freeEnergyContent').innerHTML = `
-                    <div class="weather-disabled">Error loading free energy data</div>
-                `;
-            }
-        }
+        // Load free energy config on page load
+        loadFreeEnergyConfig();
 
         document.getElementById('freeEnergySettingsForm').addEventListener('submit', async (e) => {
             e.preventDefault();
