@@ -620,24 +620,22 @@
                 </div>
             </div>
 
-            <!-- Step 2: Weather (Optional) -->
+            <!-- Step 2: Location (Optional) -->
             <div class="setup-step" id="setupStep2">
-                <h2>Weather Integration (Optional)</h2>
-                <p style="color: #8892b0; margin-bottom: 20px;">Add OpenWeatherMap to skip discharge on cloudy days. Get a free API key from openweathermap.org</p>
+                <h2>Location Setup (Optional)</h2>
+                <p style="color: #8892b0; margin-bottom: 20px;">Set your location to enable weather-based discharge skipping and solar forecasts. No API key required!</p>
 
-                <div class="setup-field">
-                    <label>OpenWeatherMap API Key</label>
-                    <input type="text" id="setupWeatherKey" placeholder="Your API key (optional)">
+                <div class="setup-field" style="position: relative;">
+                    <label>Search Your Location</label>
+                    <input type="text" id="setupCitySearch" placeholder="Type city name (e.g. Sydney)..." autocomplete="off">
+                    <input type="hidden" id="setupCityName">
+                    <input type="hidden" id="setupLatitude">
+                    <input type="hidden" id="setupLongitude">
+                    <input type="hidden" id="setupTimezone">
+                    <div id="setupCityDropdown" class="city-dropdown"></div>
                 </div>
 
                 <div id="weatherTestResult" class="test-result" style="display: none;"></div>
-
-                <div class="setup-field" id="setupCityField" style="display: none; position: relative;">
-                    <label>Your Location</label>
-                    <input type="text" id="setupCitySearch" placeholder="Type at least 3 characters..." autocomplete="off">
-                    <input type="hidden" id="setupCityName">
-                    <div id="setupCityDropdown" class="city-dropdown"></div>
-                </div>
 
                 <div class="setup-buttons">
                     <button type="button" class="btn btn-secondary" onclick="goToStep(1)">Back</button>
@@ -647,16 +645,19 @@
 
             <!-- Step 3: Solar Capacity -->
             <div class="setup-step" id="setupStep3">
-                <h2>Solar System Details</h2>
-                <p style="color: #8892b0; margin-bottom: 20px;">Enter your solar capacity for energy estimates. Use inverter capacity if panel capacity is unknown.</p>
+                <h2>Solar System Details (Optional)</h2>
+                <p style="color: #8892b0; margin-bottom: 20px;">Enter your system capacity for accurate solar forecasts. Panel tilt and direction are automatically calculated from your location.</p>
 
                 <div class="setup-field">
                     <label>Inverter Capacity (kW)</label>
-                    <input type="number" id="setupInverterCapacity" placeholder="e.g. 5" min="0" step="0.1">
+                    <input type="number" id="setupInverterCapacity" placeholder="e.g. 5 for a 5kW inverter" min="0" step="0.1">
+                    <small style="color: #666;">Your inverter's rated power (e.g. 5, 8, 10)</small>
                 </div>
+
                 <div class="setup-field">
-                    <label>Panel Capacity (kW, optional override)</label>
-                    <input type="number" id="setupPanelCapacity" placeholder="Leave blank to use inverter capacity" min="0" step="0.1">
+                    <label>Panel Capacity (kWp)</label>
+                    <input type="number" id="setupPanelCapacity" placeholder="Leave blank to auto-estimate" min="0" step="0.1">
+                    <small style="color: #666;">Optional - if not set, estimated as inverter capacity × 1.25</small>
                 </div>
 
                 <div class="setup-buttons">
@@ -786,9 +787,12 @@
                     </div>
                     <div class="weather-settings-row">
                         <div class="setting-item" style="flex: 2; position: relative;">
-                            <label>City</label>
-                            <input type="text" id="weatherCity" placeholder="Type 3+ chars to search..." autocomplete="off">
+                            <label>Location</label>
+                            <input type="text" id="weatherCity" placeholder="Type 2+ chars to search..." autocomplete="off">
                             <input type="hidden" id="weatherCityName">
+                            <input type="hidden" id="weatherLatitude">
+                            <input type="hidden" id="weatherLongitude">
+                            <input type="hidden" id="weatherTimezone">
                             <div id="cityDropdown" class="city-dropdown"></div>
                         </div>
                         <div class="setting-item">
@@ -801,16 +805,12 @@
                         <div class="setting-item">
                             <label>Inverter Capacity (kW)</label>
                             <input type="number" id="weatherInverterCapacity" min="0" max="100" step="0.1" value="0" placeholder="e.g. 5">
+                            <small style="color: #666; font-size: 0.8em;">Your inverter's rated power</small>
                         </div>
                         <div class="setting-item">
-                            <label>Panel Capacity (kW, optional)</label>
-                            <input type="number" id="weatherPanelCapacity" min="0" max="100" step="0.1" value="0" placeholder="Override if known">
-                        </div>
-                    </div>
-                    <div class="weather-settings-row">
-                        <div class="setting-item" style="flex: 1;">
-                            <label>API Key (OpenWeatherMap)</label>
-                            <input type="password" id="weatherApiKey" placeholder="Enter API key to update">
+                            <label>Panel Capacity (kWp)</label>
+                            <input type="number" id="weatherPanelCapacity" min="0" max="100" step="0.1" value="0" placeholder="Optional - auto from inverter">
+                            <small style="color: #666; font-size: 0.8em;">Leave blank to auto-estimate (inverter × 1.25)</small>
                         </div>
                     </div>
                     <button type="submit" class="btn btn-primary btn-sm">Save Weather Settings</button>
@@ -965,91 +965,33 @@
             }
         }
 
-        // Setup wizard - auto-test weather API key
-        let setupWeatherKeyTimeout;
-        let setupCityApiKey = '';
-        let setupCitySearchInitialized = false;
-
-        document.getElementById('setupWeatherKey').addEventListener('input', (e) => {
-            clearTimeout(setupWeatherKeyTimeout);
-            const apiKey = e.target.value.trim();
-            const resultEl = document.getElementById('weatherTestResult');
-            const nextBtn = document.getElementById('setupWeatherNextBtn');
-
-            if (!apiKey) {
-                resultEl.style.display = 'none';
-                document.getElementById('setupCityField').style.display = 'none';
-                nextBtn.textContent = 'Skip';
-                return;
-            }
-
-            // Auto-test after 800ms of no typing
-            setupWeatherKeyTimeout = setTimeout(() => testWeatherKey(apiKey), 800);
-        });
-
-        async function testWeatherKey(apiKey) {
-            const resultEl = document.getElementById('weatherTestResult');
-            const nextBtn = document.getElementById('setupWeatherNextBtn');
-
-            resultEl.style.display = 'block';
-            resultEl.className = 'test-result';
-            resultEl.textContent = 'Validating API key...';
-
-            try {
-                const response = await fetch('/api/setup/test-weather', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ api_key: apiKey })
-                });
-                const data = await response.json();
-
-                if (data.success) {
-                    resultEl.className = 'test-result success';
-                    resultEl.textContent = 'API key valid! Search for your location:';
-                    document.getElementById('setupCityField').style.display = 'block';
-                    nextBtn.textContent = 'Next';
-                    setupCityApiKey = apiKey;
-                    if (!setupCitySearchInitialized) {
-                        initSetupCitySearch();
-                        setupCitySearchInitialized = true;
-                    }
-                } else {
-                    resultEl.className = 'test-result error';
-                    resultEl.textContent = `Invalid: ${data.error}`;
-                    document.getElementById('setupCityField').style.display = 'none';
-                    nextBtn.textContent = 'Skip';
-                }
-            } catch (error) {
-                resultEl.className = 'test-result error';
-                resultEl.textContent = `Error: ${error.message}`;
-                document.getElementById('setupCityField').style.display = 'none';
-                nextBtn.textContent = 'Skip';
-            }
-        }
-
-        // Setup wizard city search
+        // Setup wizard city search (no API key required - uses Open-Meteo)
         let setupCitySearchTimeout;
-        function initSetupCitySearch() {
+
+        // Initialize setup city search on page load
+        (function initSetupCitySearch() {
             const input = document.getElementById('setupCitySearch');
             const dropdown = document.getElementById('setupCityDropdown');
+            const resultEl = document.getElementById('weatherTestResult');
+            const nextBtn = document.getElementById('setupWeatherNextBtn');
 
             input.addEventListener('input', async (e) => {
                 clearTimeout(setupCitySearchTimeout);
                 const query = e.target.value.trim();
 
-                if (query.length < 3) {
+                if (query.length < 2) {
                     dropdown.classList.remove('show');
                     return;
                 }
 
                 setupCitySearchTimeout = setTimeout(async () => {
                     try {
-                        const response = await fetch(`/api/setup/search-cities?q=${encodeURIComponent(query)}&api_key=${encodeURIComponent(setupCityApiKey)}`);
+                        const response = await fetch(`/api/setup/search-cities?q=${encodeURIComponent(query)}`);
                         const data = await response.json();
 
                         if (data.success && data.cities.length > 0) {
                             dropdown.innerHTML = data.cities.map(city =>
-                                `<div class="city-option" data-name="${city.display_name}">${city.display_name}</div>`
+                                `<div class="city-option" data-name="${city.display_name}" data-lat="${city.lat}" data-lon="${city.lon}" data-tz="${city.timezone || 'auto'}">${city.display_name}</div>`
                             ).join('');
                             dropdown.classList.add('show');
                         } else {
@@ -1065,14 +1007,30 @@
             dropdown.addEventListener('click', (e) => {
                 if (e.target.classList.contains('city-option')) {
                     const cityName = e.target.dataset.name;
+                    const lat = e.target.dataset.lat;
+                    const lon = e.target.dataset.lon;
+                    const tz = e.target.dataset.tz;
+
                     document.getElementById('setupCitySearch').value = cityName;
                     document.getElementById('setupCityName').value = cityName;
+                    document.getElementById('setupLatitude').value = lat;
+                    document.getElementById('setupLongitude').value = lon;
+                    document.getElementById('setupTimezone').value = tz;
                     dropdown.classList.remove('show');
+
+                    // Show success and enable next
+                    resultEl.style.display = 'block';
+                    resultEl.className = 'test-result success';
+                    resultEl.textContent = `Location set: ${cityName}`;
+                    nextBtn.textContent = 'Next';
                 }
             });
-        }
+        })();
 
         async function completeSetup() {
+            const lat = document.getElementById('setupLatitude').value;
+            const lon = document.getElementById('setupLongitude').value;
+
             const payload = {
                 deye: {
                     api_base_url: document.getElementById('setupApiUrl').value,
@@ -1083,8 +1041,10 @@
                     device_sn: document.getElementById('setupDeviceSn').value
                 },
                 weather: {
-                    api_key: document.getElementById('setupWeatherKey').value || '',
-                    city_name: document.getElementById('setupCityName').value || ''
+                    city_name: document.getElementById('setupCityName').value || '',
+                    latitude: lat ? parseFloat(lat) : null,
+                    longitude: lon ? parseFloat(lon) : null,
+                    timezone: document.getElementById('setupTimezone').value || 'auto'
                 },
                 solar: {
                     inverter_capacity_kw: parseFloat(document.getElementById('setupInverterCapacity').value) || 0,
@@ -1564,6 +1524,9 @@
                 document.getElementById('weatherEnabled').checked = config.enabled;
                 document.getElementById('weatherCityName').value = config.city_name || '';
                 document.getElementById('weatherCity').value = config.city_name || '';
+                document.getElementById('weatherLatitude').value = config.latitude || '';
+                document.getElementById('weatherLongitude').value = config.longitude || '';
+                document.getElementById('weatherTimezone').value = config.timezone || 'auto';
                 document.getElementById('weatherSolarThreshold').value = config.min_solar_threshold_kwh || 15;
                 document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || '';
                 document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || '';
@@ -1573,14 +1536,14 @@
         }
 
 
-        // City search autocomplete
+        // City search autocomplete (uses Open-Meteo - no API key required)
         let citySearchTimeout;
         document.getElementById('weatherCity').addEventListener('input', async (e) => {
             clearTimeout(citySearchTimeout);
             const query = e.target.value.trim();
             const dropdown = document.getElementById('cityDropdown');
 
-            if (query.length < 3) {
+            if (query.length < 2) {
                 dropdown.classList.remove('show');
                 return;
             }
@@ -1589,10 +1552,10 @@
                 try {
                     const response = await fetch('/api/weather/cities?q=' + encodeURIComponent(query));
                     const data = await response.json();
-                    
+
                     if (data.success && data.cities.length > 0) {
-                        dropdown.innerHTML = data.cities.map(city => 
-                            '<div class="city-option" data-lat="' + city.lat + '" data-lon="' + city.lon + '" data-name="' + city.display_name + '">' + city.display_name + '</div>'
+                        dropdown.innerHTML = data.cities.map(city =>
+                            '<div class="city-option" data-lat="' + city.lat + '" data-lon="' + city.lon + '" data-name="' + city.display_name + '" data-tz="' + (city.timezone || 'auto') + '">' + city.display_name + '</div>'
                         ).join('');
                         dropdown.classList.add('show');
                     } else {
@@ -1609,6 +1572,9 @@
             if (e.target.classList.contains('city-option')) {
                 document.getElementById('weatherCityName').value = e.target.dataset.name;
                 document.getElementById('weatherCity').value = e.target.dataset.name;
+                document.getElementById('weatherLatitude').value = e.target.dataset.lat;
+                document.getElementById('weatherLongitude').value = e.target.dataset.lon;
+                document.getElementById('weatherTimezone').value = e.target.dataset.tz || 'auto';
                 document.getElementById('cityDropdown').classList.remove('show');
             }
         });
@@ -1630,18 +1596,19 @@
         document.getElementById('weatherSettingsForm').addEventListener('submit', async (e) => {
             e.preventDefault();
 
+            const lat = document.getElementById('weatherLatitude').value;
+            const lon = document.getElementById('weatherLongitude').value;
+
             const payload = {
                 enabled: document.getElementById('weatherEnabled').checked,
                 city_name: document.getElementById('weatherCityName').value || '',
+                latitude: lat ? parseFloat(lat) : null,
+                longitude: lon ? parseFloat(lon) : null,
+                timezone: document.getElementById('weatherTimezone').value || 'auto',
                 min_solar_threshold_kwh: parseFloat(document.getElementById('weatherSolarThreshold').value) || 15,
                 inverter_capacity_kw: parseFloat(document.getElementById('weatherInverterCapacity').value) || 0,
                 panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0
             };
-
-            const apiKey = document.getElementById('weatherApiKey').value;
-            if (apiKey) {
-                payload.api_key = apiKey;
-            }
 
             try {
                 const response = await fetch('/api/weather/config', {
@@ -1653,7 +1620,6 @@
 
                 if (data.success) {
                     showToast('Weather settings saved');
-                    document.getElementById('weatherApiKey').value = '';
                     toggleWeatherSettings();
                     refreshWeather();
                 } else {

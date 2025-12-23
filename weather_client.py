@@ -21,201 +21,59 @@ class WeatherAPIError(Exception):
 
 
 class WeatherClient:
-    """Client for OpenWeatherMap API to fetch weather forecasts"""
+    """Client for Open-Meteo API to fetch weather forecasts (no API key required)"""
 
-    def __init__(self, api_key: str, city_name: str):
-        self.api_key = api_key
-        self.city_name = city_name
-        self.latitude = None
-        self.longitude = None
-        self._coordinates_cached = False
-        self.base_url = "https://api.openweathermap.org/data/2.5"
+    def __init__(self, latitude: float, longitude: float, timezone_str: str = "auto"):
+        self.latitude = latitude
+        self.longitude = longitude
+        self.timezone_str = timezone_str
+        self.base_url = "https://api.open-meteo.com/v1/forecast"
+        self.geocoding_url = "https://geocoding-api.open-meteo.com/v1/search"
         self._cache = {}
         self._cache_time = None
         self._cache_duration = 300  # 5 minutes cache
 
-    def _geocode_city(self) -> bool:
-        """Geocode city_name to get latitude and longitude. Returns True if successful."""
-        if self._coordinates_cached:
-            return self.latitude is not None and self.longitude is not None
-
-        self._coordinates_cached = True
-
-        if not self.city_name:
-            logger.error("No city name configured for weather")
-            return False
-
-        cities = self.search_cities(self.api_key, self.city_name, limit=1)
-        if not cities:
-            logger.error(f"Could not geocode city: {self.city_name}")
-            return False
-
-        self.latitude = cities[0]["lat"]
-        self.longitude = cities[0]["lon"]
-        logger.info(f"Geocoded {self.city_name} successfully")
-        return True
-
     @staticmethod
-    def search_cities(api_key: str, query: str, limit: int = 5):
-        """Search for cities by name using OpenWeatherMap Geocoding API."""
-        if not query or len(query) < 3:
+    def search_cities(query: str, limit: int = 5) -> List[Dict]:
+        """Search for cities by name using Open-Meteo Geocoding API (no API key needed)."""
+        if not query or len(query) < 2:
             return []
-        import requests
-        url = "http://api.openweathermap.org/geo/1.0/direct"
-        params = {"q": query, "limit": limit, "appid": api_key}
+
+        url = "https://geocoding-api.open-meteo.com/v1/search"
+        params = {
+            "name": query,
+            "count": limit,
+            "language": "en",
+            "format": "json"
+        }
+
         try:
             response = requests.get(url, params=params, timeout=10)
             response.raise_for_status()
-            results = response.json()
+            data = response.json()
+
+            results = data.get("results", [])
             cities = []
             for item in results:
                 city = {
                     "name": item.get("name", ""),
                     "country": item.get("country", ""),
-                    "state": item.get("state", ""),
-                    "lat": item.get("lat"),
-                    "lon": item.get("lon")
+                    "state": item.get("admin1", ""),  # admin1 is state/province
+                    "lat": item.get("latitude"),
+                    "lon": item.get("longitude"),
+                    "timezone": item.get("timezone", "auto")
                 }
                 display_parts = [city["name"]]
                 if city["state"]:
                     display_parts.append(city["state"])
-                display_parts.append(city["country"])
+                if city["country"]:
+                    display_parts.append(city["country"])
                 city["display_name"] = ", ".join(display_parts)
                 cities.append(city)
             return cities
-        except Exception:
+        except Exception as e:
+            logger.error(f"City search error: {e}")
             return []
-
-    @staticmethod
-    def estimate_solar_output_simple(panel_capacity_kw: float, clouds: int, condition: str, pop: int) -> float:
-        """
-        Simple estimate of daily solar output (fallback when hourly data unavailable).
-        """
-        base_daily_kwh = panel_capacity_kw * 5.5 * 0.9
-        cloud_factor = 1.0 - (clouds / 100 * 0.5)
-        condition_factors = {
-            "Clear": 1.0, "Clouds": 0.75, "Rain": 0.35, "Drizzle": 0.45,
-            "Thunderstorm": 0.25, "Snow": 0.3, "Mist": 0.65, "Fog": 0.55, "Haze": 0.75
-        }
-        condition_factor = condition_factors.get(condition, 0.65)
-        pop_factor = 1.0 - (pop / 100 * 0.2)
-        weather_factor = ((cloud_factor + condition_factor) / 2) * pop_factor
-        return round(base_daily_kwh * weather_factor, 1)
-
-    def estimate_solar_output_hourly(self, panel_capacity_kw: float, date_str: str) -> Optional[float]:
-        """
-        Estimate daily solar output using hourly forecast data.
-        Only counts production during daylight hours with hour-specific factors.
-
-        Args:
-            panel_capacity_kw: Panel capacity in kW
-            date_str: Date string in YYYY-MM-DD format
-
-        Returns:
-            Estimated kWh for the day, or None if hourly data unavailable
-        """
-        if "hourly_data" not in self._cache:
-            logger.debug(f"No hourly_data in cache for solar estimate")
-            return None
-
-        hourly_data = self._cache["hourly_data"].get(date_str, [])
-        if not hourly_data:
-            logger.debug(f"No hourly data for date {date_str}, available dates: {list(self._cache['hourly_data'].keys())}")
-            return None
-
-        # Base daily production varies by latitude (peak sun hours equivalent)
-        # Higher latitudes = less solar potential
-        # Typical summer values: equator ~6.0, 20° ~5.5, 35° ~4.5, 45° ~4.0
-        lat = abs(self.latitude) if self.latitude else 35  # Default to mid-latitude
-        if lat < 15:
-            base_kwh_per_kw = 5.8
-        elif lat < 25:
-            base_kwh_per_kw = 5.3
-        elif lat < 35:
-            base_kwh_per_kw = 4.8
-        elif lat < 45:
-            base_kwh_per_kw = 4.3
-        else:
-            base_kwh_per_kw = 3.8
-
-        # Hour-based solar intensity factors for 3-hour windows
-        # Represents the fraction of daily production in each 3-hour window
-        # Weighted towards midday when sun is strongest (sum ~1.0)
-        hour_weights = {
-            6: 0.05,   # 6-9am: sunrise ramp-up
-            7: 0.05,
-            8: 0.08,
-            9: 0.12,   # 9am-12pm: building
-            10: 0.12,
-            11: 0.14,
-            12: 0.14,  # 12-3pm: peak production
-            13: 0.14,
-            14: 0.12,
-            15: 0.12,  # 3-6pm: declining
-            16: 0.08,
-            17: 0.05,
-            18: 0.03   # 6-7pm: sunset
-        }
-
-        # Condition factors only for precipitation/obstruction conditions
-        # "Clear" and "Clouds" rely on cloud percentage instead
-        condition_factors = {
-            "Rain": 0.25, "Drizzle": 0.35, "Thunderstorm": 0.1,
-            "Snow": 0.15, "Mist": 0.5, "Fog": 0.4, "Haze": 0.7
-        }
-
-        # Calculate base daily production for this system
-        base_daily_kwh = panel_capacity_kw * base_kwh_per_kw
-
-        total_kwh = 0.0
-        hours_with_data = set()
-
-        for entry in hourly_data:
-            hour = entry.get("hour", 12)
-            clouds = entry.get("clouds", 0)
-            condition = entry.get("condition", "Clear")
-            pop = entry.get("pop", 0)
-
-            # Skip nighttime hours
-            if hour < 6 or hour > 18:
-                continue
-
-            # Get weight for this hour
-            hour_weight = hour_weights.get(hour, 0)
-            if hour_weight == 0:
-                continue
-
-            hours_with_data.add(hour)
-
-            # Cloud impact: 0-100% clouds reduces output
-            # At 100% overcast, output is about 25-30% of clear sky
-            cloud_factor = 1.0 - (clouds / 100 * 0.75)
-
-            # Precipitation/obstruction conditions apply additional penalty
-            # For Clear/Clouds, only cloud_factor matters
-            if condition in condition_factors:
-                cond_factor = condition_factors[condition]
-                weather_factor = min(cloud_factor, cond_factor)
-            else:
-                weather_factor = cloud_factor
-
-            # Precipitation probability slightly reduces expected output
-            pop_factor = 1.0 - (pop / 100 * 0.3)
-            weather_factor *= pop_factor
-
-            # Calculate kWh contribution from this period
-            # Each 3-hour period covers ~3 hours worth of production
-            # Scale the hour_weight by 3 since we have 3-hour data points
-            period_kwh = base_daily_kwh * hour_weight * 3 * weather_factor
-
-            total_kwh += period_kwh
-            logger.debug(f"Hour {hour}: clouds={clouds}, cond={condition}, weather_factor={weather_factor:.2f}, kwh={period_kwh:.1f}")
-
-        # Need at least 1 data point to make any estimate
-        if len(hours_with_data) < 1:
-            return None
-
-        return round(total_kwh, 1) if total_kwh > 0 else None
 
     def _is_cache_valid(self) -> bool:
         """Check if cached data is still valid"""
@@ -226,17 +84,6 @@ class WeatherClient:
     def _make_request_with_retry(self, url: str, params: dict, max_retries: int = 2) -> requests.Response:
         """
         Make an HTTP request with retry logic for transient errors.
-
-        Args:
-            url: The URL to request
-            params: Query parameters
-            max_retries: Maximum number of retry attempts for transient errors
-
-        Returns:
-            Response object
-
-        Raises:
-            WeatherAPIError: On permanent failures or after retries exhausted
         """
         last_error = None
 
@@ -248,12 +95,12 @@ class WeatherClient:
                 if response.status_code == 429:
                     if attempt < max_retries:
                         retry_after = int(response.headers.get("Retry-After", 60))
-                        wait_time = min(retry_after, 60)  # Cap at 60 seconds
+                        wait_time = min(retry_after, 60)
                         logger.warning(f"Rate limited, waiting {wait_time}s before retry")
                         time.sleep(wait_time)
                         continue
                     raise WeatherAPIError(
-                        "OpenWeatherMap API rate limit exceeded",
+                        "Open-Meteo API rate limit exceeded",
                         is_temporary=True,
                         status_code=429
                     )
@@ -261,12 +108,12 @@ class WeatherClient:
                 # Server errors - retry
                 if response.status_code >= 500:
                     if attempt < max_retries:
-                        wait_time = 2 ** attempt  # Exponential backoff: 1s, 2s
+                        wait_time = 2 ** attempt
                         logger.warning(f"Server error {response.status_code}, retrying in {wait_time}s")
                         time.sleep(wait_time)
                         continue
                     raise WeatherAPIError(
-                        f"OpenWeatherMap API server error (HTTP {response.status_code})",
+                        f"Open-Meteo API server error (HTTP {response.status_code})",
                         is_temporary=True,
                         status_code=response.status_code
                     )
@@ -281,7 +128,7 @@ class WeatherClient:
                     time.sleep(wait_time)
                     continue
                 raise WeatherAPIError(
-                    "OpenWeatherMap API request timed out",
+                    "Open-Meteo API request timed out",
                     is_temporary=True
                 )
 
@@ -289,7 +136,6 @@ class WeatherClient:
                 last_error = e
                 error_str = str(e).lower()
 
-                # DNS resolution failure
                 if "name or service not known" in error_str or "getaddrinfo" in error_str or "nodename nor servname" in error_str:
                     if attempt < max_retries:
                         wait_time = 2 ** attempt
@@ -297,92 +143,69 @@ class WeatherClient:
                         time.sleep(wait_time)
                         continue
                     raise WeatherAPIError(
-                        "Unable to resolve OpenWeatherMap API hostname (DNS failure)",
+                        "Unable to resolve Open-Meteo API hostname (DNS failure)",
                         is_temporary=True
                     )
 
-                # Connection refused
                 if "connection refused" in error_str:
                     raise WeatherAPIError(
-                        "Connection to OpenWeatherMap API refused",
+                        "Connection to Open-Meteo API refused",
                         is_temporary=True
                     )
 
-                # Generic connection error - retry
                 if attempt < max_retries:
                     wait_time = 2 ** attempt
                     logger.warning(f"Connection error, retrying in {wait_time}s: {e}")
                     time.sleep(wait_time)
                     continue
                 raise WeatherAPIError(
-                    f"Unable to connect to OpenWeatherMap API: {e}",
+                    f"Unable to connect to Open-Meteo API: {e}",
                     is_temporary=True
                 )
 
             except requests.exceptions.RequestException as e:
                 raise WeatherAPIError(
-                    f"OpenWeatherMap API request failed: {e}",
+                    f"Open-Meteo API request failed: {e}",
                     is_temporary=False
                 )
 
-        # Should not reach here, but just in case
         raise WeatherAPIError(
-            f"OpenWeatherMap API request failed after {max_retries + 1} attempts",
+            f"Open-Meteo API request failed after {max_retries + 1} attempts",
             is_temporary=True
         )
 
     def get_forecast(self) -> Dict[str, Any]:
         """
-        Get 5-day weather forecast with 3-hourly data for solar predictions.
-        Uses the free tier 5-day/3-hour forecast API which provides
-        the hourly data needed for accurate solar output estimates.
+        Get 7-day weather forecast with hourly data for solar predictions.
+        Uses Open-Meteo free API (no API key required).
         """
         if self._is_cache_valid() and "forecast" in self._cache:
             logger.debug("Using cached forecast data")
             return self._cache["forecast"]
 
-        # Geocode city name to coordinates if not already done
-        if not self._geocode_city():
-            return {
-                "success": False,
-                "error": f"Could not geocode city: {self.city_name}"
-            }
-
-        # Use legacy 5-day/3-hour API - free tier and provides hourly data for solar calc
-        return self._get_forecast_legacy()
-
-    def _get_forecast_legacy(self) -> Dict[str, Any]:
-        """
-        Fallback to 5-day/3-hour forecast API (free tier)
-        Aggregates into daily forecasts
-        """
         try:
-            url = f"{self.base_url}/forecast"
             params = {
-                "lat": self.latitude,
-                "lon": self.longitude,
-                "appid": self.api_key,
-                "units": "metric"
+                "latitude": self.latitude,
+                "longitude": self.longitude,
+                "hourly": "temperature_2m,cloud_cover,precipitation_probability,precipitation,weather_code",
+                "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,precipitation_probability_max",
+                "timezone": self.timezone_str,
+                "forecast_days": 7
             }
 
-            logger.info("Fetching weather forecast using legacy 5-day API")
-            response = self._make_request_with_retry(url, params)
+            logger.info("Fetching weather forecast from Open-Meteo")
+            response = self._make_request_with_retry(self.base_url, params)
 
-            # Handle authentication errors
-            if response.status_code == 401:
-                error_msg = "Invalid OpenWeatherMap API key"
-                logger.error(error_msg)
-                return {"success": False, "error": error_msg, "daily": [], "is_temporary": False}
-
-            if response.status_code == 403:
-                error_msg = "OpenWeatherMap API access forbidden - check API key permissions"
-                logger.error(error_msg)
+            if response.status_code == 400:
+                error_data = response.json()
+                error_msg = error_data.get("reason", "Invalid request")
+                logger.error(f"Open-Meteo API error: {error_msg}")
                 return {"success": False, "error": error_msg, "daily": [], "is_temporary": False}
 
             response.raise_for_status()
             data = response.json()
 
-            forecast = self._parse_legacy_forecast(data)
+            forecast = self._parse_forecast(data)
             self._cache["forecast"] = forecast
             self._cache_time = datetime.now()
 
@@ -392,17 +215,9 @@ class WeatherClient:
             logger.error(f"Weather API error: {e}")
             return {
                 "success": False,
-                "error": "Weather API error. Check logs for details.",
+                "error": str(e),
                 "daily": [],
                 "is_temporary": e.is_temporary
-            }
-        except requests.exceptions.HTTPError as e:
-            logger.error(f"HTTP error fetching weather: {e}")
-            return {
-                "success": False,
-                "error": "OpenWeatherMap API returned an error. Check logs for details.",
-                "daily": [],
-                "is_temporary": False
             }
         except Exception as e:
             logger.error(f"Unexpected error fetching weather forecast: {e}")
@@ -413,143 +228,385 @@ class WeatherClient:
                 "is_temporary": False
             }
 
-    def _parse_onecall_forecast(self, data: Dict) -> Dict[str, Any]:
-        """Parse One Call API response into daily forecast"""
-        daily_forecasts = []
+    def _parse_forecast(self, data: Dict) -> Dict[str, Any]:
+        """Parse Open-Meteo API response into daily forecast format"""
+        daily_data = data.get("daily", {})
+        hourly_data = data.get("hourly", {})
 
-        current = data.get("current", {})
-        daily_list = data.get("daily", [])
+        # Store hourly data for solar calculations
+        hourly_by_date = {}
+        hourly_times = hourly_data.get("time", [])
+        hourly_clouds = hourly_data.get("cloud_cover", [])
+        hourly_precip_prob = hourly_data.get("precipitation_probability", [])
+        hourly_weather_codes = hourly_data.get("weather_code", [])
 
-        for i, day in enumerate(daily_list[:5]):  # Up to 5 days
-            dt = datetime.fromtimestamp(day.get("dt", 0))
-            weather_list = day.get("weather", [])
-            weather = weather_list[0] if weather_list else {}
+        for i, time_str in enumerate(hourly_times):
+            dt = datetime.fromisoformat(time_str)
+            date_key = dt.strftime("%Y-%m-%d")
+            hour = dt.hour
 
-            daily_forecasts.append({
-                "date": dt.strftime("%Y-%m-%d"),
-                "day_name": dt.strftime("%A"),
-                "is_today": i == 0,
-                "temp_min": day.get("temp", {}).get("min"),
-                "temp_max": day.get("temp", {}).get("max"),
-                "condition": weather.get("main", "Unknown"),
-                "description": weather.get("description", ""),
-                "icon": weather.get("icon", "01d"),
-                "clouds": day.get("clouds", 0),
-                "pop": int(day.get("pop", 0) * 100),  # Probability of precipitation
-                "rain": day.get("rain", 0),
-                "uvi": day.get("uvi", 0),
-                "is_bad_weather": False  # Will be calculated by analyzer
-            })
+            if date_key not in hourly_by_date:
+                hourly_by_date[date_key] = []
 
-        current_weather_list = current.get("weather", [])
-        current_weather = current_weather_list[0] if current_weather_list else {}
-        location = self.city_name if self.city_name else data.get("timezone", "Unknown")
-        return {
-            "success": True,
-            "location": location,
-            "current": {
-                "temp": current.get("temp"),
-                "condition": current_weather.get("main", "Unknown"),
-                "clouds": current.get("clouds", 0)
-            },
-            "daily": daily_forecasts
-        }
-
-    def _parse_legacy_forecast(self, data: Dict) -> Dict[str, Any]:
-        """Parse 5-day/3-hour forecast into daily aggregates and store hourly data"""
-        daily_data = {}
-        hourly_data = {}  # Store hourly data for solar calculations
-
-        # Get timezone offset from API response (seconds from UTC)
-        tz_offset_seconds = data.get("city", {}).get("timezone", 0)
-        local_tz = timezone(timedelta(seconds=tz_offset_seconds))
-
-        for item in data.get("list", []):
-            # Convert UTC timestamp to location's local time
-            utc_dt = datetime.fromtimestamp(item.get("dt", 0), tz=timezone.utc)
-            local_dt = utc_dt.astimezone(local_tz)
-            date_key = local_dt.strftime("%Y-%m-%d")
-            hour = local_dt.hour
-
-            if date_key not in daily_data:
-                daily_data[date_key] = {
-                    "temps": [],
-                    "conditions": [],
-                    "clouds": [],
-                    "pop": [],
-                    "rain": 0
-                }
-                hourly_data[date_key] = []
-
-            main = item.get("main", {})
-            weather = item.get("weather", [{}])[0]
-            clouds = item.get("clouds", {}).get("all", 0)
-            pop = item.get("pop", 0) * 100
-            condition = weather.get("main", "Unknown")
-
-            daily_data[date_key]["temps"].append(main.get("temp", 0))
-            daily_data[date_key]["conditions"].append(condition)
-            daily_data[date_key]["clouds"].append(clouds)
-            daily_data[date_key]["pop"].append(pop)
-            daily_data[date_key]["rain"] += item.get("rain", {}).get("3h", 0)
-
-            # Store hourly data for solar calculation
-            hourly_data[date_key].append({
+            hourly_by_date[date_key].append({
                 "hour": hour,
-                "clouds": clouds,
-                "condition": condition,
-                "pop": pop,
-                "hours": 3  # 3-hour forecast period
+                "clouds": hourly_clouds[i] if i < len(hourly_clouds) else 0,
+                "condition": self._weather_code_to_condition(hourly_weather_codes[i] if i < len(hourly_weather_codes) else 0),
+                "pop": hourly_precip_prob[i] if i < len(hourly_precip_prob) else 0,
+                "hours": 1
             })
 
-        # Cache hourly data for solar calculations
-        self._cache["hourly_data"] = hourly_data
-        logger.debug(f"Cached hourly weather data for {len(hourly_data)} days")
+        self._cache["hourly_data"] = hourly_by_date
+        logger.debug(f"Cached hourly weather data for {len(hourly_by_date)} days")
 
+        # Build daily forecasts
         daily_forecasts = []
-        # Use location's timezone for "today" comparison
-        today = datetime.now(local_tz).strftime("%Y-%m-%d")
+        dates = daily_data.get("time", [])
+        temp_maxs = daily_data.get("temperature_2m_max", [])
+        temp_mins = daily_data.get("temperature_2m_min", [])
+        weather_codes = daily_data.get("weather_code", [])
+        precip_sums = daily_data.get("precipitation_sum", [])
+        precip_probs = daily_data.get("precipitation_probability_max", [])
 
-        for i, (date_key, day_data) in enumerate(sorted(daily_data.items())[:5]):
-            dt = datetime.strptime(date_key, "%Y-%m-%d")
+        today = datetime.now().strftime("%Y-%m-%d")
 
-            # Get most common condition for the day
-            condition_counts = {}
-            for cond in day_data["conditions"]:
-                condition_counts[cond] = condition_counts.get(cond, 0) + 1
-            main_condition = max(condition_counts, key=condition_counts.get)
+        for i, date_str in enumerate(dates[:7]):
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            weather_code = weather_codes[i] if i < len(weather_codes) else 0
+            condition = self._weather_code_to_condition(weather_code)
 
-            # Get weather icon based on condition
-            icon_map = {
-                "Clear": "01d", "Clouds": "03d", "Rain": "10d",
-                "Drizzle": "09d", "Thunderstorm": "11d", "Snow": "13d",
-                "Mist": "50d", "Fog": "50d"
-            }
+            # Calculate average cloud cover for the day from hourly data
+            day_hourly = hourly_by_date.get(date_str, [])
+            avg_clouds = 0
+            if day_hourly:
+                cloud_values = [h["clouds"] for h in day_hourly if 6 <= h["hour"] <= 18]
+                if cloud_values:
+                    avg_clouds = int(sum(cloud_values) / len(cloud_values))
 
             daily_forecasts.append({
-                "date": date_key,
+                "date": date_str,
                 "day_name": dt.strftime("%A"),
-                "is_today": date_key == today,
-                "temp_min": min(day_data["temps"]) if day_data["temps"] else None,
-                "temp_max": max(day_data["temps"]) if day_data["temps"] else None,
-                "condition": main_condition,
-                "description": main_condition.lower(),
-                "icon": icon_map.get(main_condition, "01d"),
-                "clouds": int(sum(day_data["clouds"]) / len(day_data["clouds"])) if day_data["clouds"] else 0,
-                "pop": int(max(day_data["pop"])) if day_data["pop"] else 0,
-                "rain": round(day_data["rain"], 1),
-                "uvi": 0,  # Not available in legacy API
+                "is_today": date_str == today,
+                "temp_min": temp_mins[i] if i < len(temp_mins) else None,
+                "temp_max": temp_maxs[i] if i < len(temp_maxs) else None,
+                "condition": condition,
+                "description": condition.lower(),
+                "icon": self._condition_to_icon(condition),
+                "clouds": avg_clouds,
+                "pop": int(precip_probs[i]) if i < len(precip_probs) else 0,
+                "rain": precip_sums[i] if i < len(precip_sums) else 0,
+                "uvi": 0,
                 "is_bad_weather": False
             })
 
-        city = data.get("city", {})
-        location = self.city_name if self.city_name else city.get("name", "Unknown")
         return {
             "success": True,
-            "location": location,
+            "location": f"{self.latitude}, {self.longitude}",
             "current": daily_forecasts[0] if daily_forecasts else {},
             "daily": daily_forecasts
         }
+
+    def _weather_code_to_condition(self, code: int) -> str:
+        """Convert WMO weather code to condition string"""
+        # WMO Weather interpretation codes (WW)
+        # https://open-meteo.com/en/docs
+        if code == 0:
+            return "Clear"
+        elif code in [1, 2, 3]:
+            return "Clouds"
+        elif code in [45, 48]:
+            return "Fog"
+        elif code in [51, 53, 55]:
+            return "Drizzle"
+        elif code in [56, 57]:
+            return "Drizzle"  # Freezing drizzle
+        elif code in [61, 63, 65]:
+            return "Rain"
+        elif code in [66, 67]:
+            return "Rain"  # Freezing rain
+        elif code in [71, 73, 75, 77]:
+            return "Snow"
+        elif code in [80, 81, 82]:
+            return "Rain"  # Showers
+        elif code in [85, 86]:
+            return "Snow"  # Snow showers
+        elif code in [95, 96, 99]:
+            return "Thunderstorm"
+        else:
+            return "Clouds"
+
+    def _condition_to_icon(self, condition: str) -> str:
+        """Get icon code for condition"""
+        icon_map = {
+            "Clear": "01d",
+            "Clouds": "03d",
+            "Rain": "10d",
+            "Drizzle": "09d",
+            "Thunderstorm": "11d",
+            "Snow": "13d",
+            "Fog": "50d"
+        }
+        return icon_map.get(condition, "01d")
+
+    def estimate_solar_output_hourly(self, panel_capacity_kw: float, date_str: str) -> Optional[float]:
+        """
+        Estimate daily solar output using hourly forecast data.
+        Only counts production during daylight hours with hour-specific factors.
+        """
+        if "hourly_data" not in self._cache:
+            logger.debug("No hourly_data in cache for solar estimate")
+            return None
+
+        hourly_data = self._cache["hourly_data"].get(date_str, [])
+        if not hourly_data:
+            logger.debug("No hourly data available for the requested date")
+            return None
+
+        # Base daily production varies by latitude
+        lat = abs(self.latitude) if self.latitude else 35
+        if lat < 15:
+            base_kwh_per_kw = 5.8
+        elif lat < 25:
+            base_kwh_per_kw = 5.3
+        elif lat < 35:
+            base_kwh_per_kw = 4.8
+        elif lat < 45:
+            base_kwh_per_kw = 4.3
+        else:
+            base_kwh_per_kw = 3.8
+
+        # Hour-based solar intensity factors
+        hour_weights = {
+            6: 0.02, 7: 0.05, 8: 0.08, 9: 0.11,
+            10: 0.13, 11: 0.14, 12: 0.14, 13: 0.14,
+            14: 0.13, 15: 0.11, 16: 0.08, 17: 0.05, 18: 0.02
+        }
+
+        condition_factors = {
+            "Rain": 0.25, "Drizzle": 0.35, "Thunderstorm": 0.1,
+            "Snow": 0.15, "Fog": 0.4
+        }
+
+        base_daily_kwh = panel_capacity_kw * base_kwh_per_kw
+        total_kwh = 0.0
+        hours_with_data = set()
+
+        for entry in hourly_data:
+            hour = entry.get("hour", 12)
+            clouds = entry.get("clouds", 0)
+            condition = entry.get("condition", "Clear")
+            pop = entry.get("pop", 0)
+
+            if hour < 6 or hour > 18:
+                continue
+
+            hour_weight = hour_weights.get(hour, 0)
+            if hour_weight == 0:
+                continue
+
+            hours_with_data.add(hour)
+
+            # Cloud impact
+            cloud_factor = 1.0 - (clouds / 100 * 0.75)
+
+            if condition in condition_factors:
+                cond_factor = condition_factors[condition]
+                weather_factor = min(cloud_factor, cond_factor)
+            else:
+                weather_factor = cloud_factor
+
+            pop_factor = 1.0 - (pop / 100 * 0.3)
+            weather_factor *= pop_factor
+
+            period_kwh = base_daily_kwh * hour_weight * weather_factor
+            total_kwh += period_kwh
+
+        if len(hours_with_data) < 1:
+            return None
+
+        return round(total_kwh, 1) if total_kwh > 0 else None
+
+
+class SolarForecastClient:
+    """Client for forecast.solar API to get solar production predictions"""
+
+    def __init__(self, latitude: float, longitude: float, declination: int = None,
+                 azimuth: int = None, kwp: float = 5.0):
+        """
+        Initialize solar forecast client.
+
+        Args:
+            latitude: Location latitude
+            longitude: Location longitude
+            declination: Panel tilt angle in degrees (0=horizontal, 90=vertical).
+                         If None, calculated optimally from latitude.
+            azimuth: Panel direction (-180 to 180, 0=south, -90=east, 90=west).
+                     If None, defaults to equator-facing (0 for both hemispheres in API convention).
+            kwp: System capacity in kilowatts peak
+        """
+        self.latitude = latitude
+        self.longitude = longitude
+        # Calculate optimal tilt if not provided (roughly equal to latitude for fixed panels)
+        if declination is None:
+            self.declination = self._calculate_optimal_tilt(latitude)
+        else:
+            self.declination = declination
+        # Default to equator-facing if not provided
+        if azimuth is None:
+            self.azimuth = self._calculate_optimal_azimuth(latitude)
+        else:
+            self.azimuth = azimuth
+        self.kwp = kwp
+        self.base_url = "https://api.forecast.solar"
+        self._cache = {}
+        self._cache_time = None
+        self._cache_duration = 900  # 15 minutes (API updates every 15 min)
+
+    @staticmethod
+    def _calculate_optimal_tilt(latitude: float) -> int:
+        """
+        Calculate optimal panel tilt angle based on latitude.
+        Rule of thumb: tilt angle ~ latitude for year-round optimization.
+        """
+        # Use absolute latitude, clamped between 10-60 degrees
+        optimal = abs(latitude)
+        return int(max(10, min(60, optimal)))
+
+    @staticmethod
+    def _calculate_optimal_azimuth(latitude: float) -> int:
+        """
+        Calculate optimal panel azimuth (direction) based on hemisphere.
+        forecast.solar API convention: 0=south, 180/-180=north
+        Northern hemisphere: face south (azimuth = 0)
+        Southern hemisphere: face north (azimuth = 180)
+        """
+        if latitude >= 0:
+            return 0  # Face south in northern hemisphere
+        else:
+            return 180  # Face north in southern hemisphere
+
+    def _is_cache_valid(self) -> bool:
+        """Check if cached data is still valid"""
+        if not self._cache_time:
+            return False
+        return (datetime.now() - self._cache_time).total_seconds() < self._cache_duration
+
+    def get_forecast(self) -> Dict[str, Any]:
+        """
+        Get solar production forecast from forecast.solar API.
+        Free tier: 12 requests/hour, updates every 15 minutes.
+        """
+        if self._is_cache_valid() and "forecast" in self._cache:
+            logger.debug("Using cached solar forecast data")
+            return self._cache["forecast"]
+
+        try:
+            # Public (free) API endpoint
+            url = f"{self.base_url}/estimate/{self.latitude}/{self.longitude}/{self.declination}/{self.azimuth}/{self.kwp}"
+
+            logger.info(f"Fetching solar forecast from forecast.solar for {self.kwp}kWp system")
+            response = requests.get(url, timeout=30)
+
+            if response.status_code == 429:
+                logger.warning("forecast.solar rate limit exceeded")
+                return {
+                    "success": False,
+                    "error": "Rate limit exceeded. Free tier allows 12 requests/hour.",
+                    "is_temporary": True
+                }
+
+            if response.status_code == 400:
+                error_data = response.json()
+                error_msg = error_data.get("message", {}).get("text", "Invalid request")
+                logger.error("forecast.solar API returned an error")
+                return {"success": False, "error": "Solar forecast service error", "is_temporary": False}
+
+            if response.status_code == 422:
+                logger.error("forecast.solar: Invalid location or plane parameters")
+                return {
+                    "success": False,
+                    "error": "Invalid location or solar panel configuration",
+                    "is_temporary": False
+                }
+
+            response.raise_for_status()
+            data = response.json()
+
+            forecast = self._parse_forecast(data)
+            self._cache["forecast"] = forecast
+            self._cache_time = datetime.now()
+
+            return forecast
+
+        except requests.exceptions.Timeout:
+            logger.error("forecast.solar request timed out")
+            return {"success": False, "error": "Request timed out", "is_temporary": True}
+        except requests.exceptions.RequestException as e:
+            logger.error(f"forecast.solar request failed: {e}")
+            return {"success": False, "error": str(e), "is_temporary": True}
+        except Exception as e:
+            logger.error(f"Unexpected error fetching solar forecast: {e}")
+            return {"success": False, "error": str(e), "is_temporary": False}
+
+    def _parse_forecast(self, data: Dict) -> Dict[str, Any]:
+        """Parse forecast.solar API response"""
+        result = data.get("result", {})
+        message = data.get("message", {})
+
+        # watt_hours_day contains daily totals: {"YYYY-MM-DD": wh}
+        daily_wh = result.get("watt_hours_day", {})
+
+        # Convert to daily forecasts
+        daily_forecasts = []
+        today = datetime.now().strftime("%Y-%m-%d")
+
+        for date_str, wh in sorted(daily_wh.items())[:7]:
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            kwh = wh / 1000.0
+
+            daily_forecasts.append({
+                "date": date_str,
+                "day_name": dt.strftime("%A"),
+                "is_today": date_str == today,
+                "estimated_kwh": round(kwh, 2),
+                "estimated_wh": wh
+            })
+
+        # Also store hourly data for more detailed analysis
+        hourly_wh = result.get("watt_hours", {})  # Cumulative Wh per timestamp
+        watts = result.get("watts", {})  # Instant power per timestamp
+
+        return {
+            "success": True,
+            "daily": daily_forecasts,
+            "hourly_watts": watts,
+            "hourly_wh": hourly_wh,
+            "api_calls_remaining": message.get("ratelimit", {}).get("remaining"),
+            "place": message.get("info", {}).get("place")
+        }
+
+    def get_daily_estimate(self, date_str: str = None) -> Optional[float]:
+        """
+        Get estimated kWh for a specific date.
+
+        Args:
+            date_str: Date in YYYY-MM-DD format. Defaults to tomorrow.
+
+        Returns:
+            Estimated kWh production or None if not available.
+        """
+        forecast = self.get_forecast()
+        if not forecast.get("success"):
+            return None
+
+        if date_str is None:
+            date_str = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        for day in forecast.get("daily", []):
+            if day["date"] == date_str:
+                return day["estimated_kwh"]
+
+        return None
 
 
 class WeatherAnalyser:
@@ -563,17 +620,23 @@ class WeatherAnalyser:
         self.bad_conditions = bad_conditions if bad_conditions is not None else ["Rain", "Thunderstorm", "Drizzle", "Snow"]
         self.min_cloud_cover = min_cloud_cover
 
-    def analyse_forecast(self, forecast: Dict[str, Any], panel_capacity_kw: float = None, weather_client: 'WeatherClient' = None, min_solar_threshold: float = None) -> Dict[str, Any]:
+    def analyse_forecast(
+        self,
+        forecast: Dict[str, Any],
+        panel_capacity_kw: float = None,
+        weather_client: 'WeatherClient' = None,
+        solar_client: 'SolarForecastClient' = None,
+        min_solar_threshold: float = None
+    ) -> Dict[str, Any]:
         """
-        Analyse forecast and mark bad weather days
+        Analyse forecast and mark bad weather days.
 
         Args:
             forecast: Forecast data from weather client
-            panel_capacity_kw: Panel capacity for solar estimation
+            panel_capacity_kw: Panel capacity for weather-based solar estimation
             weather_client: WeatherClient instance for hourly solar calculations
+            solar_client: SolarForecastClient for accurate solar predictions
             min_solar_threshold: Minimum solar kWh to consider a "good" day
-
-        Returns forecast with is_bad_weather flag set for each day
         """
         if not forecast.get("success") or not forecast.get("daily"):
             return forecast
@@ -581,33 +644,51 @@ class WeatherAnalyser:
         daily = forecast["daily"]
         bad_weather_days = []
 
+        # Try to get solar forecast from forecast.solar first
+        solar_forecast = None
+        if solar_client:
+            solar_forecast = solar_client.get_forecast()
+            if solar_forecast.get("success"):
+                logger.info("Using forecast.solar for solar predictions")
+
         for day in daily:
-            # Add solar output estimate if panel capacity provided
-            # Only use hourly data - don't fall back to simple (less accurate)
-            if panel_capacity_kw and panel_capacity_kw > 0 and weather_client:
+            date_str = day.get("date", "")
+
+            # Priority 1: Use forecast.solar if available
+            if solar_forecast and solar_forecast.get("success"):
+                for solar_day in solar_forecast.get("daily", []):
+                    if solar_day["date"] == date_str:
+                        day["estimated_solar_kwh"] = solar_day["estimated_kwh"]
+                        day["has_solar_prediction"] = True
+                        day["solar_source"] = "forecast.solar"
+                        break
+                else:
+                    day["estimated_solar_kwh"] = None
+                    day["has_solar_prediction"] = False
+
+            # Priority 2: Fall back to weather-based estimation
+            if not day.get("has_solar_prediction") and panel_capacity_kw and panel_capacity_kw > 0 and weather_client:
                 hourly_estimate = weather_client.estimate_solar_output_hourly(
                     panel_capacity_kw,
-                    day.get("date", "")
+                    date_str
                 )
 
                 if hourly_estimate is not None:
                     day["estimated_solar_kwh"] = hourly_estimate
                     day["has_solar_prediction"] = True
+                    day["solar_source"] = "weather_estimate"
                 else:
-                    # No hourly data available for this day
                     day["estimated_solar_kwh"] = None
                     day["has_solar_prediction"] = False
-            else:
+
+            if not day.get("has_solar_prediction"):
                 day["estimated_solar_kwh"] = None
                 day["has_solar_prediction"] = False
 
-            # Determine if bad weather based on solar prediction (if available)
-            # Otherwise fall back to condition-based check
+            # Determine if bad weather based on solar prediction
             if day.get("has_solar_prediction") and min_solar_threshold:
-                # Bad weather = solar prediction below threshold
                 is_bad = day["estimated_solar_kwh"] < min_solar_threshold
             else:
-                # Fallback to condition-based check for days without solar prediction
                 is_bad = self._is_bad_weather_day(day)
 
             day["is_bad_weather"] = is_bad
@@ -625,15 +706,12 @@ class WeatherAnalyser:
         clouds = day.get("clouds", 0)
         pop = day.get("pop", 0)
 
-        # Bad if condition is in bad list
         if condition in self.bad_conditions:
             return True
 
-        # Bad if high cloud cover
         if clouds >= self.min_cloud_cover:
             return True
 
-        # Bad if high probability of precipitation
         if pop >= 70:
             return True
 
@@ -655,12 +733,11 @@ class WeatherAnalyser:
         min_solar_kwh: float = None
     ) -> tuple[bool, str]:
         """
-        Determine if discharge should be skipped based on forecast
+        Determine if discharge should be skipped based on forecast.
 
         Args:
             forecast: Analysed forecast data
             min_solar_kwh: Minimum expected solar kWh to allow discharge.
-                          If tomorrow's solar is below this, skip discharge.
 
         Returns:
             Tuple of (should_skip, reason)
@@ -668,23 +745,23 @@ class WeatherAnalyser:
         if not forecast.get("success"):
             return False, "Weather data unavailable"
 
-        # If solar threshold is configured, use it
         if min_solar_kwh is not None and min_solar_kwh > 0:
             daily = forecast.get("daily", [])
 
-            # Check tomorrow's solar prediction (index 1 if available, else today)
+            # Check tomorrow's solar prediction
             tomorrow_idx = 1 if len(daily) > 1 else 0
             if daily:
                 tomorrow = daily[tomorrow_idx]
                 estimated_solar = tomorrow.get("estimated_solar_kwh")
 
                 if estimated_solar is not None:
+                    source = tomorrow.get("solar_source", "unknown")
                     if estimated_solar < min_solar_kwh:
                         day_name = tomorrow.get("day_name", "Tomorrow")
                         return True, f"Low solar forecast ({estimated_solar:.1f} kWh < {min_solar_kwh:.1f} kWh on {day_name})"
                     else:
                         return False, f"Good solar forecast ({estimated_solar:.1f} kWh on {tomorrow.get('day_name', 'Tomorrow')})"
                 else:
-                    return False, "Solar prediction not available (no hourly forecast data)"
+                    return False, "Solar prediction not available"
 
         return False, "Solar threshold not configured"

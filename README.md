@@ -39,19 +39,21 @@ The system can automatically skip battery discharge when bad weather is forecast
 **Why this matters:** During consecutive bad weather days, solar panels will not generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
 
 **How it works:**
-- Fetches 7-day weather forecast from OpenWeatherMap
+- Fetches 7-day weather forecast from Open-Meteo (free, no API key required)
+- Gets solar production forecasts from forecast.solar for accurate predictions
 - Analyses conditions: rain, thunderstorms, drizzle, snow, high cloud cover (>70%)
 - If bad weather is expected for X consecutive days (configurable, default 2), discharge is skipped
 - Displayed in the web UI with forecast cards showing good/bad days
 
 ## Solar Output Estimates
 
-When you configure your solar system capacity, the application displays estimated daily solar output for each forecast day. This helps you plan your energy usage and understand when discharge might be beneficial.
+When you configure your solar system details, the application displays estimated daily solar output for each forecast day. This helps you plan your energy usage and understand when discharge might be beneficial.
 
 **How it works:**
-- Enter your inverter capacity (or panel capacity if known)
-- The system calculates expected output based on weather conditions
-- Estimates account for cloud cover, precipitation probability, and weather type
+- Enter your panel capacity (kWp), tilt angle, and direction
+- The system fetches accurate predictions from [forecast.solar](https://forecast.solar) API
+- Falls back to weather-based estimation if forecast.solar is unavailable
+- Estimates account for your specific location, panel configuration, and weather conditions
 - Displayed alongside the weather forecast cards
 
 ## Requirements
@@ -89,8 +91,8 @@ The web interface is available at `http://<server_ip>:7777`
 When you first access the web interface with default configuration, a **setup wizard** will guide you through:
 
 1. **Deye Cloud Configuration** - Enter your API credentials and device serial number
-2. **Weather Integration** (optional) - Add OpenWeatherMap API key for weather-based features
-3. **Solar System Details** - Configure your inverter/panel capacity for energy estimates
+2. **Location Setup** (optional) - Search and select your location for weather forecasts (no API key required!)
+3. **Solar System Details** - Configure your panel capacity, tilt angle, and direction for accurate solar forecasts
 
 Each step includes a **Test Connection** button to verify your settings before proceeding.
 
@@ -117,15 +119,12 @@ You can also manually edit `config.json`:
   },
   "weather": {
     "enabled": true,
-    "api_key": "YOUR_OPENWEATHERMAP_API_KEY",
-    "city_name": "Sydney, New South Wales, AU",
     "latitude": -33.8688,
     "longitude": 151.2093,
-    "bad_weather_threshold_days": 2,
-    "bad_weather_conditions": ["Rain", "Thunderstorm", "Drizzle", "Snow"],
-    "min_cloud_cover_percent": 70,
-    "inverter_capacity_kw": 5,
-    "panel_capacity_kw": 0
+    "timezone": "Australia/Sydney",
+    "city_name": "Sydney, New South Wales, AU",
+    "min_solar_threshold_kwh": 15,
+    "panel_capacity_kw": 6.6
   },
   "free_energy": {
     "enabled": false,
@@ -154,18 +153,21 @@ You can also manually edit `config.json`:
 
 ### Weather Configuration (Optional)
 
+Weather and solar forecasts use free APIs (no API keys required!):
+- **Open-Meteo** for weather forecasts
+- **forecast.solar** for solar production predictions
+
+Panel tilt and direction are automatically calculated from your location for optimal positioning.
+
 | Field | Description |
 |-------|-------------|
 | `enabled` | Enable/disable weather-based discharge skip (default: false) |
-| `api_key` | OpenWeatherMap API key ([get free key](https://openweathermap.org/api)) |
-| `city_name` | City name (selected via autocomplete in UI) |
 | `latitude` | Your location latitude |
 | `longitude` | Your location longitude |
-| `bad_weather_threshold_days` | Number of consecutive bad days to trigger skip (default: 2) |
-| `bad_weather_conditions` | Weather conditions considered "bad" for solar |
-| `min_cloud_cover_percent` | Cloud cover % threshold for bad weather (default: 70) |
-| `inverter_capacity_kw` | Your inverter capacity in kW (for solar estimates) |
-| `panel_capacity_kw` | Your panel capacity in kW (optional, overrides inverter capacity) |
+| `timezone` | Your timezone (e.g., "Australia/Sydney") or "auto" |
+| `city_name` | City name (for display, selected via autocomplete in UI) |
+| `min_solar_threshold_kwh` | Minimum expected solar kWh to allow discharge (default: 15) |
+| `panel_capacity_kw` | Your panel capacity in kWp (optional - auto-estimated from inverter if not set) |
 
 ### Free Energy Window (Optional)
 

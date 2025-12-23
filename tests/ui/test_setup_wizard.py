@@ -76,8 +76,8 @@ class TestSetupWizardNavigation:
         step2 = page.locator("#setupStep2")
         expect(step2).to_have_class(re.compile(r"active"))
 
-        # Weather API key field should be visible
-        expect(page.locator("#setupWeatherKey")).to_be_visible()
+        # City search field should be visible (no API key needed)
+        expect(page.locator("#setupCitySearch")).to_be_visible()
 
     def test_navigate_back_to_step_1(self, page: Page, ensure_needs_setup_state):
         """Test navigation back from step 2 to step 1"""
@@ -115,6 +115,7 @@ class TestSetupWizardNavigation:
 
         # Solar capacity fields should be visible
         expect(page.locator("#setupInverterCapacity")).to_be_visible()
+        expect(page.locator("#setupPanelCapacity")).to_be_visible()
 
 
 @pytest.mark.ui

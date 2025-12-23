@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from flask import Flask, jsonify, render_template, request
 from deye_client import DeyeCloudClient
-from weather_client import WeatherClient, WeatherAnalyser
+from weather_client import WeatherClient, WeatherAnalyser, SolarForecastClient
 
 # Configure logging
 logging.basicConfig(
@@ -27,6 +27,7 @@ config = {}
 client: DeyeCloudClient = None
 weather_client: WeatherClient = None
 weather_analyser: WeatherAnalyser = None
+solar_client: SolarForecastClient = None
 scheduler_thread: threading.Thread = None
 scheduler_running = False
 current_state = {
@@ -123,7 +124,7 @@ def init_client():
 
 def init_weather_client():
     """Initialise weather client if enabled"""
-    global weather_client, weather_analyser
+    global weather_client, weather_analyser, solar_client
 
     weather_config = config.get("weather", {})
 
@@ -131,19 +132,19 @@ def init_weather_client():
         logger.info("Weather feature disabled")
         return
 
-    api_key = weather_config.get("api_key", "")
-    if not api_key or api_key == "YOUR_OPENWEATHERMAP_API_KEY":
-        logger.warning("Weather API key not configured - weather feature disabled")
+    latitude = weather_config.get("latitude")
+    longitude = weather_config.get("longitude")
+
+    if latitude is None or longitude is None:
+        logger.warning("Weather location not configured - weather feature disabled")
         return
 
-    city_name = weather_config.get("city_name", "")
-    if not city_name:
-        logger.warning("Weather city not configured - weather feature disabled")
-        return
+    timezone_str = weather_config.get("timezone", "auto")
 
     weather_client = WeatherClient(
-        api_key=api_key,
-        city_name=city_name
+        latitude=latitude,
+        longitude=longitude,
+        timezone_str=timezone_str
     )
 
     bad_conditions = weather_config.get("bad_weather_conditions", ["Rain", "Thunderstorm", "Drizzle", "Snow"])
@@ -154,7 +155,39 @@ def init_weather_client():
         min_cloud_cover=min_cloud_cover
     )
 
-    location_str = city_name
+    # Initialize solar forecast client if solar config is present
+    solar_config = weather_config.get("solar", {})
+    if solar_config.get("enabled", True):
+        # Use panel capacity if set, otherwise estimate from inverter capacity (typical 1.25x oversizing)
+        panel_kw = weather_config.get("panel_capacity_kw", 0)
+        inverter_kw = weather_config.get("inverter_capacity_kw", 0)
+        # Also check inverter capacity from current_state (from Deye API)
+        api_inverter_kw = (current_state.get("inverter_capacity") or 0) / 1000
+
+        if panel_kw and panel_kw > 0:
+            kwp = panel_kw
+        elif inverter_kw and inverter_kw > 0:
+            kwp = inverter_kw * 1.25  # Common panel oversizing ratio
+        elif api_inverter_kw and api_inverter_kw > 0:
+            kwp = api_inverter_kw * 1.25
+        else:
+            kwp = 5.0  # Default fallback
+
+        # Let SolarForecastClient calculate optimal tilt/azimuth from location if not specified
+        declination = solar_config.get("declination")  # None = auto-calculate
+        azimuth = solar_config.get("azimuth")  # None = auto-calculate
+
+        if kwp and kwp > 0:
+            solar_client = SolarForecastClient(
+                latitude=latitude,
+                longitude=longitude,
+                declination=declination,
+                azimuth=azimuth,
+                kwp=kwp
+            )
+            logger.info(f"Solar forecast client initialised for {kwp:.1f}kWp system (tilt={solar_client.declination}, azimuth={solar_client.azimuth})")
+
+    location_str = weather_config.get("city_name") or "configured location"
     logger.info(f"Weather client initialised for {location_str}")
 
 
@@ -166,7 +199,6 @@ def get_weather_forecast():
         return None
 
     # Check cache (update every 5 minutes - matches frontend refresh)
-    # 288 calls/day max, well under 1000/day API limit
     cache_age = None
     if weather_forecast_cache["last_update"]:
         cache_age = (datetime.now() - weather_forecast_cache["last_update"]).total_seconds()
@@ -174,8 +206,7 @@ def get_weather_forecast():
     if cache_age is None or cache_age > 300:  # 5 minutes
         try:
             forecast = weather_client.get_forecast()
-            # Get panel capacity for solar estimates
-            # If panel capacity set, use it; otherwise assume panels are ~1.25x inverter capacity
+            # Get panel capacity for solar estimates (fallback if forecast.solar unavailable)
             weather_config = config.get("weather", {})
             panel_kw = weather_config.get("panel_capacity_kw", 0)
             inverter_kw = weather_config.get("inverter_capacity_kw", 0)
@@ -190,16 +221,26 @@ def get_weather_forecast():
             else:
                 capacity_kw = 0
             logger.info(f"Solar capacity for forecast: {capacity_kw} kW (panel={panel_kw}, inverter_config={inverter_kw}, inverter_api={api_inverter_kw})")
-            # Pass weather_client for hourly solar calculations
+            # Analyse forecast with solar predictions (uses forecast.solar if available, falls back to weather-based)
             forecast = weather_analyser.analyse_forecast(
                 forecast,
                 panel_capacity_kw=capacity_kw if capacity_kw > 0 else None,
                 weather_client=weather_client,
+                solar_client=solar_client,
                 min_solar_threshold=weather_config.get("min_solar_threshold_kwh", 15)
             )
-            weather_forecast_cache["forecast"] = forecast
-            weather_forecast_cache["last_update"] = datetime.now()
-            logger.info(f"Weather forecast updated successfully")
+            # Only cache successful forecasts
+            if forecast.get("success", True):
+                # Remove any internal error details before caching
+                forecast.pop("error", None)
+                weather_forecast_cache["forecast"] = forecast
+                weather_forecast_cache["last_update"] = datetime.now()
+                logger.info("Weather forecast updated successfully")
+            else:
+                logger.warning("Weather forecast returned unsuccessful result")
+                if weather_forecast_cache["forecast"]:
+                    return weather_forecast_cache["forecast"]
+                return None
         except Exception as e:
             logger.error(f"Failed to fetch weather forecast: {e}")
             # Return cached data if available
@@ -351,14 +392,14 @@ def scheduler_loop():
 
             # Check if force discharge is enabled
             force_discharge_enabled = schedule.get("enabled", True)
-            logger.info(f"Check: enabled={force_discharge_enabled}, in_window={in_window}, soc={soc}, cutoff={cutoff_soc}, reserve={min_soc_reserve}, weather_skip={weather_skip}, free_energy={in_free_energy_window}")
 
             # Determine if we should be in force discharge mode
             # Force discharge when: enabled AND in window AND SoC above cutoff AND NOT weather skip
             should_force_discharge = force_discharge_enabled and in_window and (soc is None or soc > cutoff_soc) and not weather_skip
+            logger.debug(f"Scheduler check: discharge={'active' if should_force_discharge else 'inactive'}")
 
             if weather_skip and in_window:
-                logger.info(f"Skipping discharge due to weather: {weather_reason}")
+                logger.debug("Skipping discharge due to weather conditions")
 
             window_start = schedule.get("force_discharge_start", "17:30")
             window_end = schedule.get("force_discharge_end", "19:30")
@@ -552,53 +593,52 @@ def test_deye_connection():
 
 @app.route('/api/setup/test-weather', methods=['POST'])
 def test_weather_connection():
-    """Test OpenWeatherMap API connection"""
+    """Test weather connection (Open-Meteo - no API key required)"""
     try:
         body = request.get_json()
-        api_key = body.get("api_key")
-        
-        if not api_key:
-            return jsonify({"success": False, "error": "API key is required"})
-        
-        # Try a simple city search to test the API key
-        cities = WeatherClient.search_cities(api_key, "London", limit=1)
-        
-        if cities:
+        latitude = body.get("latitude")
+        longitude = body.get("longitude")
+
+        if latitude is None or longitude is None:
+            return jsonify({"success": False, "error": "Location coordinates are required"})
+
+        # Test by fetching a forecast for the location
+        test_client = WeatherClient(latitude=latitude, longitude=longitude)
+        forecast = test_client.get_forecast()
+
+        if forecast.get("success"):
             return jsonify({
                 "success": True,
-                "message": "API key is valid!"
+                "message": "Weather service connected successfully!"
             })
         else:
+            logger.warning("Weather test failed")
             return jsonify({
                 "success": False,
-                "error": "API key test failed. Please check your key."
+                "error": "Failed to fetch weather data. Check your location settings."
             })
 
     except Exception as e:
         logger.error(f"Error testing weather connection: {e}")
-        return jsonify({"success": False, "error": "Weather API test failed. Check logs for details."})
+        return jsonify({"success": False, "error": "Weather test failed. Check logs for details."})
 
 
 @app.route('/api/setup/search-cities')
 def setup_search_cities():
-    """Search for cities during setup using provided API key"""
+    """Search for cities during setup (no API key required - uses Open-Meteo)"""
     query = request.args.get('q', '')
-    api_key = request.args.get('api_key', '')
 
-    if len(query) < 3:
+    if len(query) < 2:
         return jsonify({"success": True, "cities": []})
 
-    if not api_key:
-        return jsonify({"success": False, "error": "API key required", "cities": []})
-
-    cities = WeatherClient.search_cities(api_key, query)
+    cities = WeatherClient.search_cities(query)
     return jsonify({"success": True, "cities": cities})
 
 
 @app.route('/api/setup/complete', methods=['POST'])
 def complete_setup():
     """Save initial setup configuration"""
-    global client, weather_client, weather_analyser
+    global client, weather_client, weather_analyser, solar_client
 
     try:
         body = request.get_json()
@@ -613,18 +653,18 @@ def complete_setup():
                 if key in deye_data:
                     config["deye"][key] = deye_data[key]
 
-        # Update Weather config
+        # Update Weather config (now uses coordinates instead of API key)
         if "weather" in body:
             weather_data = body["weather"]
             if "weather" not in config:
                 config["weather"] = {}
 
-            for key in ["enabled", "api_key", "city_name"]:
+            for key in ["enabled", "city_name", "latitude", "longitude", "timezone"]:
                 if key in weather_data:
                     config["weather"][key] = weather_data[key]
 
-            # Enable weather if API key provided
-            if weather_data.get("api_key"):
+            # Enable weather if location provided
+            if weather_data.get("latitude") is not None and weather_data.get("longitude") is not None:
                 config["weather"]["enabled"] = True
 
         # Update solar capacity (can come from weather or solar object)
@@ -644,7 +684,7 @@ def complete_setup():
 
         save_config()
 
-        # Clear weather cache to apply new capacity settings
+        # Clear weather cache to apply new settings
         weather_forecast_cache["forecast"] = None
         weather_forecast_cache["last_update"] = None
 
@@ -882,12 +922,37 @@ def get_weather():
 
     skip_active, skip_reason = should_skip_discharge_for_weather()
 
+    # Sanitize skip_reason to avoid exposing internal details
+    safe_skip_reason = "Weather conditions unfavorable" if skip_active else "Weather OK"
+
+    # Sanitize forecast to only include UI-safe fields
+    safe_forecast = {
+        "success": True,
+        "daily": [],
+        "consecutive_bad_days": forecast.get("consecutive_bad_days", 0)
+    }
+    for day in forecast.get("daily", []):
+        safe_day = {
+            "date": day.get("date"),
+            "day_name": day.get("day_name"),
+            "condition": day.get("condition"),
+            "icon": day.get("icon"),
+            "temp_max": day.get("temp_max"),
+            "temp_min": day.get("temp_min"),
+            "cloud_cover": day.get("cloud_cover"),
+            "precipitation_probability": day.get("precipitation_probability"),
+            "is_bad_weather": day.get("is_bad_weather", False),
+            "estimated_solar_kwh": day.get("estimated_solar_kwh"),
+            "solar_source": day.get("solar_source")
+        }
+        safe_forecast["daily"].append(safe_day)
+
     return jsonify({
         "success": True,
         "enabled": True,
-        "forecast": forecast,
+        "forecast": safe_forecast,
         "skip_discharge": skip_active,
-        "skip_reason": skip_reason,
+        "skip_reason": safe_skip_reason,
         "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
         "last_update": weather_forecast_cache.get("last_update").isoformat() if weather_forecast_cache.get("last_update") else None
     })
@@ -895,17 +960,20 @@ def get_weather():
 
 @app.route('/api/weather/config')
 def get_weather_config():
-    """Get weather configuration (without API key)"""
+    """Get weather configuration"""
     weather_config = config.get("weather", {})
     return jsonify({
         "enabled": weather_config.get("enabled", False),
         "city_name": weather_config.get("city_name", ""),
+        "latitude": weather_config.get("latitude"),
+        "longitude": weather_config.get("longitude"),
+        "timezone": weather_config.get("timezone", "auto"),
         "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
         "bad_weather_conditions": weather_config.get("bad_weather_conditions", []),
         "min_cloud_cover_percent": weather_config.get("min_cloud_cover_percent", 70),
         "inverter_capacity_kw": weather_config.get("inverter_capacity_kw", 0),
         "panel_capacity_kw": weather_config.get("panel_capacity_kw", 0),
-        "api_key_configured": bool(weather_config.get("api_key") and weather_config.get("api_key") != "YOUR_OPENWEATHERMAP_API_KEY")
+        "location_configured": weather_config.get("latitude") is not None and weather_config.get("longitude") is not None
     })
 
 
@@ -913,25 +981,19 @@ def get_weather_config():
 
 @app.route('/api/weather/cities')
 def search_cities():
-    """Search for cities by name"""
+    """Search for cities by name (no API key required - uses Open-Meteo)"""
     query = request.args.get('q', '')
     if len(query) < 2:
         return jsonify({"success": True, "cities": []})
 
-    weather_config = config.get("weather", {})
-    api_key = weather_config.get("api_key", "")
-
-    if not api_key or api_key == "YOUR_OPENWEATHERMAP_API_KEY":
-        return jsonify({"success": False, "error": "API key not configured", "cities": []})
-
-    cities = WeatherClient.search_cities(api_key, query)
+    cities = WeatherClient.search_cities(query)
     return jsonify({"success": True, "cities": cities})
 
 
 @app.route('/api/weather/config', methods=['POST'])
 def update_weather_config():
     """Update weather configuration"""
-    global weather_client, weather_analyser
+    global weather_client, weather_analyser, solar_client
 
     try:
         body = request.get_json()
@@ -944,6 +1006,12 @@ def update_weather_config():
             config["weather"]["enabled"] = body["enabled"]
         if "city_name" in body:
             config["weather"]["city_name"] = body["city_name"]
+        if "latitude" in body:
+            config["weather"]["latitude"] = body["latitude"]
+        if "longitude" in body:
+            config["weather"]["longitude"] = body["longitude"]
+        if "timezone" in body:
+            config["weather"]["timezone"] = body["timezone"]
         if "min_solar_threshold_kwh" in body:
             config["weather"]["min_solar_threshold_kwh"] = body["min_solar_threshold_kwh"]
         if "bad_weather_conditions" in body:
@@ -954,14 +1022,13 @@ def update_weather_config():
             config["weather"]["inverter_capacity_kw"] = body["inverter_capacity_kw"]
         if "panel_capacity_kw" in body:
             config["weather"]["panel_capacity_kw"] = body["panel_capacity_kw"]
-        if "api_key" in body and body["api_key"]:
-            config["weather"]["api_key"] = body["api_key"]
 
         save_config()
 
         # Reinitialise weather client with new config
         weather_client = None
         weather_analyser = None
+        solar_client = None
         weather_forecast_cache["forecast"] = None
         weather_forecast_cache["last_update"] = None
         init_weather_client()

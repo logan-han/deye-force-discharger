@@ -42,9 +42,12 @@ class TestAppWeatherIntegration:
                 },
                 "weather": {
                     "enabled": True,
-                    "api_key": "test_key",
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
                     "city_name": "Sydney, AU",
                     "min_solar_threshold_kwh": 5.0,
+                    "inverter_capacity_kw": 5.0,
                     "panel_capacity_kw": 6.6,
                     "bad_weather_conditions": ["Rain", "Thunderstorm"],
                     "min_cloud_cover_percent": 70
@@ -104,7 +107,7 @@ class TestAppWeatherIntegration:
         assert data["enabled"] is True
 
     def test_weather_config_api(self, app_client):
-        """Test /api/weather/config returns config without API key"""
+        """Test /api/weather/config returns config with location"""
         client, app_module = app_client
 
         response = client.get('/api/weather/config')
@@ -114,8 +117,11 @@ class TestAppWeatherIntegration:
         assert data["enabled"] is True
         assert data["city_name"] == "Sydney, AU"
         assert data["min_solar_threshold_kwh"] == 5.0
-        assert "api_key" not in data
-        assert data["api_key_configured"] is True
+        assert data["inverter_capacity_kw"] == 5.0
+        assert data["panel_capacity_kw"] == 6.6
+        assert data["latitude"] == -33.8688
+        assert data["longitude"] == 151.2093
+        assert data["location_configured"] is True
 
     @patch('app.save_config')
     @patch('app.init_weather_client')
@@ -127,7 +133,9 @@ class TestAppWeatherIntegration:
             data=json.dumps({
                 "enabled": False,
                 "city_name": "Melbourne, AU",
-                "min_solar_threshold_kwh": 8.0
+                "min_solar_threshold_kwh": 8.0,
+                "inverter_capacity_kw": 8.0,
+                "panel_capacity_kw": 10.0
             }),
             content_type='application/json'
         )
@@ -135,6 +143,8 @@ class TestAppWeatherIntegration:
 
         assert response.status_code == 200
         assert data["success"] is True
+        assert app_module.config["weather"]["inverter_capacity_kw"] == 8.0
+        assert app_module.config["weather"]["panel_capacity_kw"] == 10.0
         mock_save.assert_called_once()
         mock_init.assert_called_once()
 
@@ -168,31 +178,14 @@ class TestInitWeatherClient:
             assert app_module.weather_client is None
             assert app_module.weather_analyser is None
 
-    def test_init_no_api_key(self):
-        """Test init with missing API key"""
-        with patch('app.DeyeCloudClient'):
-            import app as app_module
-            app_module.config = {
-                "weather": {
-                    "enabled": True,
-                    "api_key": "YOUR_OPENWEATHERMAP_API_KEY"
-                }
-            }
-            app_module.weather_client = None
-            app_module.weather_analyser = None
-
-            app_module.init_weather_client()
-
-            assert app_module.weather_client is None
-
     def test_init_no_location(self):
-        """Test init with missing location"""
+        """Test init with missing location coordinates"""
         with patch('app.DeyeCloudClient'):
             import app as app_module
             app_module.config = {
                 "weather": {
                     "enabled": True,
-                    "api_key": "valid_key"
+                    "city_name": "Sydney, AU"
                 }
             }
             app_module.weather_client = None
@@ -211,7 +204,9 @@ class TestInitWeatherClient:
             app_module.config = {
                 "weather": {
                     "enabled": True,
-                    "api_key": "valid_key",
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
                     "city_name": "Sydney, AU",
                     "bad_weather_conditions": ["Rain"],
                     "min_cloud_cover_percent": 70
@@ -219,12 +214,14 @@ class TestInitWeatherClient:
             }
             app_module.weather_client = None
             app_module.weather_analyser = None
+            app_module.solar_client = None
 
             app_module.init_weather_client()
 
             mock_client.assert_called_once_with(
-                api_key="valid_key",
-                city_name="Sydney, AU"
+                latitude=-33.8688,
+                longitude=151.2093,
+                timezone_str="Australia/Sydney"
             )
             mock_analyzer.assert_called_once()
 
@@ -2059,7 +2056,7 @@ class TestSetupEndpoints:
         mock_search.return_value = [{"name": "London", "country": "GB"}]
 
         response = client.post('/api/setup/test-weather',
-            data=json.dumps({"api_key": "valid_api_key"}),
+            data=json.dumps({"latitude": -33.8688, "longitude": 151.2093}),
             content_type='application/json'
         )
         data = json.loads(response.data)
@@ -2074,7 +2071,7 @@ class TestSetupEndpoints:
         mock_search.return_value = []
 
         response = client.post('/api/setup/test-weather',
-            data=json.dumps({"api_key": "invalid_key"}),
+            data=json.dumps({"latitude": 999, "longitude": 999}),
             content_type='application/json'
         )
         data = json.loads(response.data)
@@ -2105,7 +2102,7 @@ class TestSetupEndpoints:
             {"name": "Sydney", "country": "CA"}
         ]
 
-        response = client.get('/api/setup/search-cities?q=Sydney&api_key=test_key')
+        response = client.get('/api/setup/search-cities?q=Sydney')
         data = json.loads(response.data)
 
         assert response.status_code == 200
@@ -2113,25 +2110,15 @@ class TestSetupEndpoints:
         assert len(data["cities"]) == 2
 
     def test_setup_search_cities_short_query(self, test_client):
-        """Test /api/setup/search-cities with short query"""
+        """Test /api/setup/search-cities with short query (1 char returns empty)"""
         client, app_module, _ = test_client
 
-        response = client.get('/api/setup/search-cities?q=Sy&api_key=test_key')
+        response = client.get('/api/setup/search-cities?q=S')
         data = json.loads(response.data)
 
         assert response.status_code == 200
         assert data["success"] is True
         assert len(data["cities"]) == 0
-
-    def test_setup_search_cities_no_api_key(self, test_client):
-        """Test /api/setup/search-cities without API key"""
-        client, app_module, _ = test_client
-
-        response = client.get('/api/setup/search-cities?q=Sydney')
-        data = json.loads(response.data)
-
-        assert response.status_code == 200
-        assert data["success"] is False
 
     @patch('app.save_config')
     @patch('app.init_client')
@@ -2177,7 +2164,8 @@ class TestSetupEndpoints:
                     "device_sn": "ABC123"
                 },
                 "weather": {
-                    "api_key": "weather_api_key",
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
                     "city_name": "Sydney, AU"
                 }
             }),
@@ -2898,13 +2886,14 @@ class TestSetupEndpointsEdgeCases:
         mock_search.side_effect = Exception("API error")
 
         response = client.post('/api/setup/test-weather',
-            data=json.dumps({"api_key": "test_key"}),
+            data=json.dumps({}),
             content_type='application/json'
         )
         data = json.loads(response.data)
 
         assert response.status_code == 200
         assert data["success"] is False
+        assert "coordinates" in data["error"].lower() or "required" in data["error"].lower()
 
 
 class TestShouldSkipDischargeEdgeCases:
