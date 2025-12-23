@@ -1892,6 +1892,350 @@ class TestStatusIncludesFreeEnergy:
         assert data["free_energy"]["active"] is True
 
 
+class TestSetupEndpoints:
+    """Tests for setup wizard API endpoints"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client with unconfigured state"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_instance.get_battery_info.return_value = {"soc": 75, "power": 1000}
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {
+                    "app_id": "YOUR_APP_ID",
+                    "app_secret": "YOUR_APP_SECRET",
+                    "email": "YOUR_EMAIL",
+                    "device_sn": "YOUR_DEVICE_SN"
+                },
+                "schedule": {},
+                "weather": {}
+            }
+            app_module.client = mock_instance
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module, mock_instance
+
+    def test_setup_status_needs_setup(self, test_client):
+        """Test /api/setup/status when setup is needed"""
+        client, app_module, _ = test_client
+
+        response = client.get('/api/setup/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["needs_setup"] is True
+        assert data["deye_configured"] is False
+
+    def test_setup_status_already_configured(self, test_client):
+        """Test /api/setup/status when already configured"""
+        client, app_module, _ = test_client
+        app_module.config["deye"] = {
+            "app_id": "valid_app_id",
+            "app_secret": "valid_secret",
+            "email": "test@test.com",
+            "password": "test",
+            "device_sn": "ABC123"
+        }
+
+        response = client.get('/api/setup/status')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["needs_setup"] is False
+        assert data["deye_configured"] is True
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_connection_success(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye with successful connection"""
+        client, app_module, _ = test_client
+
+        mock_test_client = Mock()
+        mock_test_client.get_device_latest_data.return_value = {
+            "code": 0,
+            "deviceDataList": [{"deviceName": "My Inverter"}]
+        }
+        mock_deye_class.return_value = mock_test_client
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "api_base_url": "https://eu1-developer.deyecloud.com",
+                "app_id": "test_app_id",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test_password",
+                "device_sn": "ABC123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert "My Inverter" in data["device_name"]
+
+    def test_test_deye_connection_missing_device_sn(self, test_client):
+        """Test /api/setup/test-deye without device serial number"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "test_app_id",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test_password"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "serial number" in data["error"].lower()
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_connection_device_not_found(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye when device not found"""
+        client, app_module, _ = test_client
+
+        mock_test_client = Mock()
+        mock_test_client.get_device_latest_data.return_value = {
+            "code": 0,
+            "deviceDataList": []
+        }
+        mock_deye_class.return_value = mock_test_client
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "test_app_id",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test_password",
+                "device_sn": "INVALID123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "not found" in data["error"].lower()
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_connection_api_error(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye with API error"""
+        client, app_module, _ = test_client
+
+        mock_test_client = Mock()
+        mock_test_client.get_device_latest_data.return_value = {
+            "code": 1,
+            "msg": "Invalid credentials"
+        }
+        mock_deye_class.return_value = mock_test_client
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "bad_id",
+                "app_secret": "bad_secret",
+                "email": "test@test.com",
+                "password": "wrong",
+                "device_sn": "ABC123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+
+    @patch('app.WeatherClient.search_cities')
+    def test_test_weather_connection_success(self, mock_search, test_client):
+        """Test /api/setup/test-weather with valid API key"""
+        client, app_module, _ = test_client
+        mock_search.return_value = [{"name": "London", "country": "GB"}]
+
+        response = client.post('/api/setup/test-weather',
+            data=json.dumps({"api_key": "valid_api_key"}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+
+    @patch('app.WeatherClient.search_cities')
+    def test_test_weather_connection_invalid_key(self, mock_search, test_client):
+        """Test /api/setup/test-weather with invalid API key"""
+        client, app_module, _ = test_client
+        mock_search.return_value = []
+
+        response = client.post('/api/setup/test-weather',
+            data=json.dumps({"api_key": "invalid_key"}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+
+    def test_test_weather_connection_no_key(self, test_client):
+        """Test /api/setup/test-weather without API key"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/setup/test-weather',
+            data=json.dumps({}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "required" in data["error"].lower()
+
+    @patch('app.WeatherClient.search_cities')
+    def test_setup_search_cities_success(self, mock_search, test_client):
+        """Test /api/setup/search-cities with results"""
+        client, app_module, _ = test_client
+        mock_search.return_value = [
+            {"name": "Sydney", "state": "NSW", "country": "AU"},
+            {"name": "Sydney", "country": "CA"}
+        ]
+
+        response = client.get('/api/setup/search-cities?q=Sydney&api_key=test_key')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert len(data["cities"]) == 2
+
+    def test_setup_search_cities_short_query(self, test_client):
+        """Test /api/setup/search-cities with short query"""
+        client, app_module, _ = test_client
+
+        response = client.get('/api/setup/search-cities?q=Sy&api_key=test_key')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert len(data["cities"]) == 0
+
+    def test_setup_search_cities_no_api_key(self, test_client):
+        """Test /api/setup/search-cities without API key"""
+        client, app_module, _ = test_client
+
+        response = client.get('/api/setup/search-cities?q=Sydney')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+
+    @patch('app.save_config')
+    @patch('app.init_client')
+    @patch('app.init_weather_client')
+    def test_complete_setup_deye_only(self, mock_weather_init, mock_client_init, mock_save, test_client):
+        """Test /api/setup/complete with Deye config only"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "deye": {
+                    "api_base_url": "https://eu1-developer.deyecloud.com",
+                    "app_id": "test_app_id",
+                    "app_secret": "test_secret",
+                    "email": "test@test.com",
+                    "password": "test_password",
+                    "device_sn": "ABC123"
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        mock_save.assert_called_once()
+        mock_client_init.assert_called_once()
+
+    @patch('app.save_config')
+    @patch('app.init_client')
+    @patch('app.init_weather_client')
+    def test_complete_setup_with_weather(self, mock_weather_init, mock_client_init, mock_save, test_client):
+        """Test /api/setup/complete with weather config"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "deye": {
+                    "app_id": "test_app_id",
+                    "app_secret": "test_secret",
+                    "email": "test@test.com",
+                    "password": "test_password",
+                    "device_sn": "ABC123"
+                },
+                "weather": {
+                    "api_key": "weather_api_key",
+                    "city_name": "Sydney, AU"
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["weather"]["enabled"] is True
+        mock_weather_init.assert_called_once()
+
+    @patch('app.save_config')
+    @patch('app.init_client')
+    @patch('app.init_weather_client')
+    def test_complete_setup_with_solar(self, mock_weather_init, mock_client_init, mock_save, test_client):
+        """Test /api/setup/complete with solar capacity"""
+        client, app_module, _ = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "deye": {
+                    "app_id": "test_app_id",
+                    "app_secret": "test_secret",
+                    "email": "test@test.com",
+                    "password": "test_password",
+                    "device_sn": "ABC123"
+                },
+                "solar": {
+                    "inverter_capacity_kw": 5.0,
+                    "panel_capacity_kw": 6.6
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["weather"]["panel_capacity_kw"] == 6.6
+        assert app_module.config["weather"]["inverter_capacity_kw"] == 5.0
+
+    def test_complete_setup_exception(self, test_client):
+        """Test /api/setup/complete handles exceptions"""
+        client, app_module, _ = test_client
+
+        with patch('app.save_config', side_effect=Exception("File error")):
+            response = client.post('/api/setup/complete',
+                data=json.dumps({"deye": {"app_id": "test"}}),
+                content_type='application/json'
+            )
+            data = json.loads(response.data)
+
+            assert response.status_code == 200
+            assert data["success"] is False
+            assert "error" in data
+
+
 class TestSchedulerFreeEnergyIntegration:
     """Tests for scheduler integration with free energy feature"""
 
