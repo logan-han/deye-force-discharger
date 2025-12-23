@@ -23,15 +23,37 @@ class WeatherAPIError(Exception):
 class WeatherClient:
     """Client for OpenWeatherMap API to fetch weather forecasts"""
 
-    def __init__(self, api_key: str, latitude: float = None, longitude: float = None, city_name: str = None):
+    def __init__(self, api_key: str, city_name: str):
         self.api_key = api_key
-        self.latitude = latitude
-        self.longitude = longitude
         self.city_name = city_name
+        self.latitude = None
+        self.longitude = None
+        self._coordinates_cached = False
         self.base_url = "https://api.openweathermap.org/data/2.5"
         self._cache = {}
         self._cache_time = None
         self._cache_duration = 1800  # 30 minutes cache
+
+    def _geocode_city(self) -> bool:
+        """Geocode city_name to get latitude and longitude. Returns True if successful."""
+        if self._coordinates_cached:
+            return self.latitude is not None and self.longitude is not None
+
+        self._coordinates_cached = True
+
+        if not self.city_name:
+            logger.error("No city name configured for weather")
+            return False
+
+        cities = self.search_cities(self.api_key, self.city_name, limit=1)
+        if not cities:
+            logger.error(f"Could not geocode city: {self.city_name}")
+            return False
+
+        self.latitude = cities[0]["lat"]
+        self.longitude = cities[0]["lon"]
+        logger.info(f"Geocoded {self.city_name} to ({self.latitude}, {self.longitude})")
+        return True
 
     @staticmethod
     def search_cities(api_key: str, query: str, limit: int = 5):
@@ -200,6 +222,13 @@ class WeatherClient:
         if self._is_cache_valid() and "forecast" in self._cache:
             logger.debug("Using cached forecast data")
             return self._cache["forecast"]
+
+        # Geocode city name to coordinates if not already done
+        if not self._geocode_city():
+            return {
+                "success": False,
+                "error": f"Could not geocode city: {self.city_name}"
+            }
 
         try:
             # Use One Call API 3.0 for daily forecast
@@ -488,14 +517,15 @@ class WeatherAnalyser:
     def should_skip_discharge(
         self,
         forecast: Dict[str, Any],
-        threshold_days: int = 2
+        min_solar_kwh: float = None
     ) -> tuple[bool, str]:
         """
         Determine if discharge should be skipped based on forecast
 
         Args:
             forecast: Analysed forecast data
-            threshold_days: Number of consecutive bad days to trigger skip
+            min_solar_kwh: Minimum expected solar kWh to allow discharge.
+                          If tomorrow's solar is below this, skip discharge.
 
         Returns:
             Tuple of (should_skip, reason)
@@ -503,15 +533,23 @@ class WeatherAnalyser:
         if not forecast.get("success"):
             return False, "Weather data unavailable"
 
-        consecutive = forecast.get("consecutive_bad_days", 0)
-        bad_days = forecast.get("bad_weather_days", [])
+        # If solar threshold is configured, use it
+        if min_solar_kwh is not None and min_solar_kwh > 0:
+            daily = forecast.get("daily", [])
 
-        if consecutive >= threshold_days:
-            return True, f"Bad weather expected for next {consecutive} days ({', '.join(bad_days[:threshold_days])})"
+            # Check tomorrow's solar prediction (index 1 if available, else today)
+            tomorrow_idx = 1 if len(daily) > 1 else 0
+            if daily:
+                tomorrow = daily[tomorrow_idx]
+                estimated_solar = tomorrow.get("estimated_solar_kwh")
 
-        # Also check if there are enough bad days in the next threshold_days period
-        upcoming_bad = sum(1 for day in forecast.get("daily", [])[:threshold_days] if day.get("is_bad_weather"))
-        if upcoming_bad >= threshold_days:
-            return True, f"{upcoming_bad} bad weather days in next {threshold_days} days"
+                if estimated_solar is not None:
+                    if estimated_solar < min_solar_kwh:
+                        day_name = tomorrow.get("day_name", "Tomorrow")
+                        return True, f"Low solar forecast ({estimated_solar:.1f} kWh < {min_solar_kwh:.1f} kWh on {day_name})"
+                    else:
+                        return False, f"Good solar forecast ({estimated_solar:.1f} kWh on {tomorrow.get('day_name', 'Tomorrow')})"
+                else:
+                    return False, "Solar prediction not available (configure panel capacity)"
 
-        return False, f"Good weather forecast ({consecutive} consecutive bad days)"
+        return False, "Solar threshold not configured"

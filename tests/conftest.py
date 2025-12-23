@@ -13,9 +13,9 @@ def sample_weather_config():
     return {
         "enabled": True,
         "api_key": "test_api_key",
-        "latitude": -33.8688,
-        "longitude": 151.2093,
-        "bad_weather_threshold_days": 2,
+        "city_name": "Sydney, AU",
+        "min_solar_threshold_kwh": 5.0,
+        "panel_capacity_kw": 6.6,
         "bad_weather_conditions": ["Rain", "Thunderstorm", "Drizzle", "Snow"],
         "min_cloud_cover_percent": 70
     }

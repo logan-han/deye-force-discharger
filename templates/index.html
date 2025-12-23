@@ -742,14 +742,13 @@
                         <div class="setting-item" style="flex: 2; position: relative;">
                             <label>City</label>
                             <input type="text" id="weatherCity" placeholder="Search city..." autocomplete="off">
-                            <input type="hidden" id="weatherLat">
-                            <input type="hidden" id="weatherLon">
                             <input type="hidden" id="weatherCityName">
                             <div id="cityDropdown" class="city-dropdown"></div>
                         </div>
                         <div class="setting-item">
-                            <label>Bad Days Threshold</label>
-                            <input type="number" id="weatherThreshold" min="1" max="7" value="2">
+                            <label>Min Solar Threshold (kWh)</label>
+                            <input type="number" id="weatherSolarThreshold" min="0" max="50" step="0.5" value="0">
+                            <small style="color: #666; font-size: 0.8em;">Skip discharge if tomorrow's forecast is below this</small>
                         </div>
                         <div class="setting-item">
                             <label>Cloud Cover %</label>
@@ -1282,11 +1281,9 @@
                 const config = await response.json();
 
                 document.getElementById('weatherEnabled').checked = config.enabled;
-                document.getElementById('weatherLat').value = config.latitude || '';
-                document.getElementById('weatherLon').value = config.longitude || '';
                 document.getElementById('weatherCityName').value = config.city_name || '';
                 document.getElementById('weatherCity').value = config.city_name || '';
-                document.getElementById('weatherThreshold').value = config.bad_weather_threshold_days || 2;
+                document.getElementById('weatherSolarThreshold').value = config.min_solar_threshold_kwh || 0;
                 document.getElementById('weatherCloudCover').value = config.min_cloud_cover_percent || 70;
                 document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || 0;
                 document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || 0;
@@ -1330,8 +1327,6 @@
 
         document.getElementById('cityDropdown').addEventListener('click', (e) => {
             if (e.target.classList.contains('city-option')) {
-                document.getElementById('weatherLat').value = e.target.dataset.lat;
-                document.getElementById('weatherLon').value = e.target.dataset.lon;
                 document.getElementById('weatherCityName').value = e.target.dataset.name;
                 document.getElementById('weatherCity').value = e.target.dataset.name;
                 document.getElementById('cityDropdown').classList.remove('show');
@@ -1358,9 +1353,7 @@
             const payload = {
                 enabled: document.getElementById('weatherEnabled').checked,
                 city_name: document.getElementById('weatherCityName').value || '',
-                latitude: parseFloat(document.getElementById('weatherLat').value) || null,
-                longitude: parseFloat(document.getElementById('weatherLon').value) || null,
-                bad_weather_threshold_days: parseInt(document.getElementById('weatherThreshold').value) || 2,
+                min_solar_threshold_kwh: parseFloat(document.getElementById('weatherSolarThreshold').value) || 0,
                 min_cloud_cover_percent: parseInt(document.getElementById('weatherCloudCover').value) || 70,
                 inverter_capacity_kw: parseFloat(document.getElementById('weatherInverterCapacity').value) || 0,
                 panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0

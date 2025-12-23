@@ -106,20 +106,14 @@ def init_weather_client():
         logger.warning("Weather API key not configured - weather feature disabled")
         return
 
-    latitude = weather_config.get("latitude")
-    longitude = weather_config.get("longitude")
-
-    if latitude is None or longitude is None:
-        logger.warning("Weather location not configured - weather feature disabled")
-        return
-
     city_name = weather_config.get("city_name", "")
+    if not city_name:
+        logger.warning("Weather city not configured - weather feature disabled")
+        return
 
     weather_client = WeatherClient(
         api_key=api_key,
-        latitude=latitude,
-        longitude=longitude,
-        city_name=city_name if city_name else None
+        city_name=city_name
     )
 
     bad_conditions = weather_config.get("bad_weather_conditions", ["Rain", "Thunderstorm", "Drizzle", "Snow"])
@@ -130,7 +124,7 @@ def init_weather_client():
         min_cloud_cover=min_cloud_cover
     )
 
-    location_str = city_name if city_name else f"({latitude}, {longitude})"
+    location_str = city_name
     logger.info(f"Weather client initialised for {location_str}")
 
 
@@ -182,8 +176,8 @@ def should_skip_discharge_for_weather() -> tuple:
     if not forecast:
         return False, "Weather data unavailable"
 
-    threshold_days = weather_config.get("bad_weather_threshold_days", 2)
-    return weather_analyser.should_skip_discharge(forecast, threshold_days)
+    min_solar_kwh = weather_config.get("min_solar_threshold_kwh", 0)
+    return weather_analyser.should_skip_discharge(forecast, min_solar_kwh)
 
 
 def is_within_discharge_window() -> bool:
@@ -538,7 +532,7 @@ def complete_setup():
             if "weather" not in config:
                 config["weather"] = {}
             
-            for key in ["enabled", "api_key", "city_name", "latitude", "longitude", 
+            for key in ["enabled", "api_key", "city_name",
                        "inverter_capacity_kw", "panel_capacity_kw"]:
                 if key in weather_data:
                     config["weather"][key] = weather_data[key]
@@ -584,7 +578,7 @@ def get_status():
         "enabled": weather_config.get("enabled", False),
         "skip_active": current_state.get("weather_skip_active", False),
         "skip_reason": current_state.get("weather_skip_reason"),
-        "threshold_days": weather_config.get("bad_weather_threshold_days", 2)
+        "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0)
     }
 
     # Include free energy status
@@ -778,7 +772,7 @@ def get_weather():
         "forecast": forecast,
         "skip_discharge": skip_active,
         "skip_reason": skip_reason,
-        "threshold_days": weather_config.get("bad_weather_threshold_days", 2),
+        "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
         "last_update": weather_forecast_cache.get("last_update").isoformat() if weather_forecast_cache.get("last_update") else None
     })
 
@@ -790,9 +784,7 @@ def get_weather_config():
     return jsonify({
         "enabled": weather_config.get("enabled", False),
         "city_name": weather_config.get("city_name", ""),
-        "latitude": weather_config.get("latitude"),
-        "longitude": weather_config.get("longitude"),
-        "bad_weather_threshold_days": weather_config.get("bad_weather_threshold_days", 2),
+        "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
         "bad_weather_conditions": weather_config.get("bad_weather_conditions", []),
         "min_cloud_cover_percent": weather_config.get("min_cloud_cover_percent", 70),
         "inverter_capacity_kw": weather_config.get("inverter_capacity_kw", 0),
@@ -836,12 +828,8 @@ def update_weather_config():
             config["weather"]["enabled"] = body["enabled"]
         if "city_name" in body:
             config["weather"]["city_name"] = body["city_name"]
-        if "latitude" in body:
-            config["weather"]["latitude"] = body["latitude"]
-        if "longitude" in body:
-            config["weather"]["longitude"] = body["longitude"]
-        if "bad_weather_threshold_days" in body:
-            config["weather"]["bad_weather_threshold_days"] = body["bad_weather_threshold_days"]
+        if "min_solar_threshold_kwh" in body:
+            config["weather"]["min_solar_threshold_kwh"] = body["min_solar_threshold_kwh"]
         if "bad_weather_conditions" in body:
             config["weather"]["bad_weather_conditions"] = body["bad_weather_conditions"]
         if "min_cloud_cover_percent" in body:

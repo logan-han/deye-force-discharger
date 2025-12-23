@@ -13,18 +13,24 @@ class TestWeatherClient:
         """Set up test fixtures"""
         self.client = WeatherClient(
             api_key="test_api_key",
-            latitude=-33.8688,
-            longitude=151.2093
+            city_name="Sydney, AU"
         )
+        # Pre-set coordinates to avoid geocoding in tests
+        self.client.latitude = -33.8688
+        self.client.longitude = 151.2093
+        self.client._coordinates_cached = True
 
     def test_init(self):
         """Test WeatherClient initialization"""
-        assert self.client.api_key == "test_api_key"
-        assert self.client.latitude == -33.8688
-        assert self.client.longitude == 151.2093
-        assert self.client.base_url == "https://api.openweathermap.org/data/2.5"
-        assert self.client._cache == {}
-        assert self.client._cache_time is None
+        client = WeatherClient(api_key="test_api_key", city_name="Sydney, AU")
+        assert client.api_key == "test_api_key"
+        assert client.city_name == "Sydney, AU"
+        assert client.latitude is None
+        assert client.longitude is None
+        assert client._coordinates_cached is False
+        assert client.base_url == "https://api.openweathermap.org/data/2.5"
+        assert client._cache == {}
+        assert client._cache_time is None
 
     def test_is_cache_valid_no_cache(self):
         """Test cache validity when no cache exists"""
@@ -333,85 +339,90 @@ class TestWeatherAnalyser:
 
         assert result == forecast
 
-    def test_should_skip_discharge_yes(self):
-        """Test skip discharge when bad weather exceeds threshold"""
+    def test_should_skip_discharge_low_solar(self):
+        """Test skip discharge when solar forecast is below threshold"""
         forecast = {
             "success": True,
-            "consecutive_bad_days": 3,
-            "bad_weather_days": ["2023-12-22", "2023-12-23", "2023-12-24"],
             "daily": [
-                {"is_bad_weather": True},
-                {"is_bad_weather": True},
-                {"is_bad_weather": True}
+                {"day_name": "Today", "estimated_solar_kwh": 8.0},
+                {"day_name": "Tomorrow", "estimated_solar_kwh": 3.5}
             ]
         }
 
-        should_skip, reason = self.analyser.should_skip_discharge(forecast, threshold_days=2)
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
 
         assert should_skip is True
-        assert "3 days" in reason
+        assert "Low solar" in reason
+        assert "3.5" in reason
 
-    def test_should_skip_discharge_no(self):
-        """Test no skip when good weather"""
+    def test_should_skip_discharge_good_solar(self):
+        """Test no skip when solar forecast is above threshold"""
         forecast = {
             "success": True,
-            "consecutive_bad_days": 1,
-            "bad_weather_days": ["2023-12-22"],
             "daily": [
-                {"is_bad_weather": True},
-                {"is_bad_weather": False},
-                {"is_bad_weather": False}
+                {"day_name": "Today", "estimated_solar_kwh": 8.0},
+                {"day_name": "Tomorrow", "estimated_solar_kwh": 12.5}
             ]
         }
 
-        should_skip, reason = self.analyser.should_skip_discharge(forecast, threshold_days=2)
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
 
         assert should_skip is False
-        assert "Good weather" in reason
+        assert "Good solar" in reason
 
-    def test_should_skip_discharge_threshold_match(self):
-        """Test skip when bad days exactly match threshold"""
+    def test_should_skip_discharge_no_threshold(self):
+        """Test no skip when no solar threshold configured"""
         forecast = {
             "success": True,
-            "consecutive_bad_days": 2,
-            "bad_weather_days": ["2023-12-22", "2023-12-23"],
             "daily": [
-                {"is_bad_weather": True},
-                {"is_bad_weather": True},
-                {"is_bad_weather": False}
+                {"day_name": "Today", "estimated_solar_kwh": 3.0},
+                {"day_name": "Tomorrow", "estimated_solar_kwh": 2.0}
             ]
         }
 
-        should_skip, reason = self.analyser.should_skip_discharge(forecast, threshold_days=2)
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=0)
 
-        assert should_skip is True
+        assert should_skip is False
+        assert "not configured" in reason
 
     def test_should_skip_discharge_failed_forecast(self):
         """Test skip check with failed forecast"""
         forecast = {"success": False, "error": "API error"}
 
-        should_skip, reason = self.analyser.should_skip_discharge(forecast, threshold_days=2)
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
 
         assert should_skip is False
         assert "unavailable" in reason
 
-    def test_should_skip_discharge_non_consecutive_bad_days(self):
-        """Test skip when non-consecutive bad days exceed threshold in window"""
+    def test_should_skip_discharge_no_solar_estimate(self):
+        """Test no skip when solar estimate not available"""
         forecast = {
             "success": True,
-            "consecutive_bad_days": 0,
-            "bad_weather_days": [],
             "daily": [
-                {"is_bad_weather": True},
-                {"is_bad_weather": True},
-                {"is_bad_weather": False}
+                {"day_name": "Today"},
+                {"day_name": "Tomorrow"}
             ]
         }
 
-        should_skip, reason = self.analyser.should_skip_discharge(forecast, threshold_days=2)
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
 
-        assert should_skip is True
-        assert "2 bad weather days" in reason
+        assert should_skip is False
+        assert "not available" in reason
+
+    def test_should_skip_discharge_exact_threshold(self):
+        """Test no skip when solar equals threshold exactly"""
+        forecast = {
+            "success": True,
+            "daily": [
+                {"day_name": "Today", "estimated_solar_kwh": 5.0},
+                {"day_name": "Tomorrow", "estimated_solar_kwh": 5.0}
+            ]
+        }
+
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
+
+        assert should_skip is False
+        assert "Good solar" in reason
 
 
 class TestWeatherClientEdgeCases:
@@ -419,7 +430,7 @@ class TestWeatherClientEdgeCases:
 
     def test_empty_daily_forecast(self):
         """Test handling of empty daily forecast"""
-        client = WeatherClient("key", 0, 0)
+        client = WeatherClient("key", "Test City")
         data = {
             "timezone": "UTC",
             "current": {},
@@ -433,7 +444,7 @@ class TestWeatherClientEdgeCases:
 
     def test_missing_weather_data(self):
         """Test handling of missing weather data in daily forecast"""
-        client = WeatherClient("key", 0, 0)
+        client = WeatherClient("key", "Test City")
         data = {
             "timezone": "UTC",
             "current": {},
@@ -454,7 +465,7 @@ class TestWeatherClientEdgeCases:
 
     def test_legacy_forecast_empty_list(self):
         """Test legacy forecast with empty list"""
-        client = WeatherClient("key", 0, 0)
+        client = WeatherClient("key", "Test City")
         data = {
             "city": {"name": "Test"},
             "list": []
@@ -521,9 +532,12 @@ class TestWeatherClientAPIDown:
         """Set up test fixtures"""
         self.client = WeatherClient(
             api_key="test_api_key",
-            latitude=-33.8688,
-            longitude=151.2093
+            city_name="Sydney, AU"
         )
+        # Pre-set coordinates to avoid geocoding in tests
+        self.client.latitude = -33.8688
+        self.client.longitude = 151.2093
+        self.client._coordinates_cached = True
 
     @patch('weather_client.requests.get')
     def test_connection_timeout(self, mock_get):
@@ -870,29 +884,43 @@ class TestWeatherClientCityName:
         """Test WeatherClient initialization with city_name"""
         client = WeatherClient(
             api_key="test_key",
-            latitude=-33.8688,
-            longitude=151.2093,
             city_name="Sydney, New South Wales, AU"
         )
 
         assert client.city_name == "Sydney, New South Wales, AU"
+        assert client.latitude is None
+        assert client.longitude is None
+        assert client._coordinates_cached is False
 
-    def test_init_without_city_name(self):
-        """Test WeatherClient initialization without city_name"""
-        client = WeatherClient(
-            api_key="test_key",
-            latitude=-33.8688,
-            longitude=151.2093
-        )
+    @patch.object(WeatherClient, 'search_cities')
+    def test_geocode_city_success(self, mock_search):
+        """Test successful geocoding of city name"""
+        mock_search.return_value = [{"lat": -33.8688, "lon": 151.2093, "name": "Sydney"}]
 
-        assert client.city_name is None
+        client = WeatherClient(api_key="test_key", city_name="Sydney, AU")
+        result = client._geocode_city()
+
+        assert result is True
+        assert client.latitude == -33.8688
+        assert client.longitude == 151.2093
+        assert client._coordinates_cached is True
+
+    @patch.object(WeatherClient, 'search_cities')
+    def test_geocode_city_failure(self, mock_search):
+        """Test failed geocoding of city name"""
+        mock_search.return_value = []
+
+        client = WeatherClient(api_key="test_key", city_name="Nonexistent City")
+        result = client._geocode_city()
+
+        assert result is False
+        assert client.latitude is None
+        assert client._coordinates_cached is True  # Cached as failed
 
     def test_parse_onecall_uses_city_name(self):
         """Test that _parse_onecall_forecast uses city_name for location"""
         client = WeatherClient(
             api_key="test_key",
-            latitude=-33.8688,
-            longitude=151.2093,
             city_name="Sydney, AU"
         )
 
@@ -910,8 +938,6 @@ class TestWeatherClientCityName:
         """Test that _parse_legacy_forecast uses city_name for location"""
         client = WeatherClient(
             api_key="test_key",
-            latitude=-33.8688,
-            longitude=151.2093,
             city_name="Sydney, AU"
         )
 

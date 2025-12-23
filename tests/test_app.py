@@ -43,9 +43,9 @@ class TestAppWeatherIntegration:
                 "weather": {
                     "enabled": True,
                     "api_key": "test_key",
-                    "latitude": -33.8688,
-                    "longitude": 151.2093,
-                    "bad_weather_threshold_days": 2,
+                    "city_name": "Sydney, AU",
+                    "min_solar_threshold_kwh": 5.0,
+                    "panel_capacity_kw": 6.6,
                     "bad_weather_conditions": ["Rain", "Thunderstorm"],
                     "min_cloud_cover_percent": 70
                 }
@@ -112,9 +112,8 @@ class TestAppWeatherIntegration:
 
         assert response.status_code == 200
         assert data["enabled"] is True
-        assert data["latitude"] == -33.8688
-        assert data["longitude"] == 151.2093
-        assert data["bad_weather_threshold_days"] == 2
+        assert data["city_name"] == "Sydney, AU"
+        assert data["min_solar_threshold_kwh"] == 5.0
         assert "api_key" not in data
         assert data["api_key_configured"] is True
 
@@ -127,9 +126,8 @@ class TestAppWeatherIntegration:
         response = client.post('/api/weather/config',
             data=json.dumps({
                 "enabled": False,
-                "latitude": -34.0,
-                "longitude": 152.0,
-                "bad_weather_threshold_days": 3
+                "city_name": "Melbourne, AU",
+                "min_solar_threshold_kwh": 8.0
             }),
             content_type='application/json'
         )
@@ -214,8 +212,7 @@ class TestInitWeatherClient:
                 "weather": {
                     "enabled": True,
                     "api_key": "valid_key",
-                    "latitude": -33.8688,
-                    "longitude": 151.2093,
+                    "city_name": "Sydney, AU",
                     "bad_weather_conditions": ["Rain"],
                     "min_cloud_cover_percent": 70
                 }
@@ -227,8 +224,7 @@ class TestInitWeatherClient:
 
             mock_client.assert_called_once_with(
                 api_key="valid_key",
-                latitude=-33.8688,
-                longitude=151.2093
+                city_name="Sydney, AU"
             )
             mock_analyzer.assert_called_once()
 
@@ -266,7 +262,7 @@ class TestShouldSkipDischargeForWeather:
 
         with patch('app.DeyeCloudClient'):
             import app as app_module
-            app_module.config = {"weather": {"enabled": True, "bad_weather_threshold_days": 2}}
+            app_module.config = {"weather": {"enabled": True, "min_solar_threshold_kwh": 5.0}}
             app_module.weather_client = Mock()
             app_module.weather_analyser = Mock()
 
@@ -285,7 +281,7 @@ class TestShouldSkipDischargeForWeather:
 
         with patch('app.DeyeCloudClient'):
             import app as app_module
-            app_module.config = {"weather": {"enabled": True, "bad_weather_threshold_days": 2}}
+            app_module.config = {"weather": {"enabled": True, "min_solar_threshold_kwh": 5.0}}
             app_module.weather_client = Mock()
             app_module.weather_analyser = Mock()
             app_module.weather_analyser.should_skip_discharge.return_value = (True, "3 bad days")
