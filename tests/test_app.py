@@ -149,7 +149,7 @@ class TestAppWeatherIntegration:
         assert "weather" in data
         assert data["weather"]["enabled"] is True
         assert "skip_active" in data["weather"]
-        assert "threshold_days" in data["weather"]
+        assert "min_solar_threshold_kwh" in data["weather"]
 
 
 class TestInitWeatherClient:

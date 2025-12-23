@@ -85,7 +85,7 @@ class TestWeatherClient:
         result = self.client.get_forecast()
 
         assert result["success"] is True
-        assert result["location"] == "Australia/Sydney"
+        assert result["location"] == "Sydney, AU"  # Uses city_name from client
         assert len(result["daily"]) == 2
         assert result["daily"][0]["condition"] == "Clear"
         assert result["daily"][1]["condition"] == "Rain"
@@ -128,7 +128,7 @@ class TestWeatherClient:
         result = self.client.get_forecast()
 
         assert result["success"] is True
-        assert result["location"] == "Sydney"
+        assert result["location"] == "Sydney, AU"  # Uses city_name from client
 
     @patch('weather_client.requests.get')
     def test_get_forecast_uses_cache(self, mock_get):
@@ -175,7 +175,7 @@ class TestWeatherClient:
         result = self.client._parse_onecall_forecast(data)
 
         assert result["success"] is True
-        assert result["location"] == "Test/Zone"
+        assert result["location"] == "Sydney, AU"  # Uses city_name from client (fallback would be "Test/Zone")
         assert result["current"]["temp"] == 22.0
         assert len(result["daily"]) == 1
         assert result["daily"][0]["temp_min"] == 15.0
@@ -208,7 +208,7 @@ class TestWeatherClient:
         result = self.client._parse_legacy_forecast(data)
 
         assert result["success"] is True
-        assert result["location"] == "TestCity"
+        assert result["location"] == "Sydney, AU"  # Uses city_name from client (fallback would be "TestCity")
         assert len(result["daily"]) >= 1
 
 
