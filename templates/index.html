@@ -49,6 +49,8 @@
         .status-item .value { font-size: 1.3rem; font-weight: bold; }
         .status-item .value.active { color: #4ecca3; }
         .status-item .value.inactive { color: #e94560; }
+        .status-item .value.charging { color: #3498db; }
+        .status-item .sub-label { font-size: 0.65rem; color: #666; margin-top: 2px; }
 
         /* Gauge Sections */
         .gauge-section {
@@ -688,6 +690,11 @@
                     <div class="label">Free Energy</div>
                     <div class="value" id="freeEnergyStatus">--</div>
                 </div>
+                <div class="status-item free-energy-charge" id="freeEnergyChargeItem" style="display: none;">
+                    <div class="label">Free Charge</div>
+                    <div class="value" id="freeEnergyChargeStatus">--</div>
+                    <div class="sub-label" id="freeEnergyChargeDetail"></div>
+                </div>
             </div>
 
             <!-- Power Gauge -->
@@ -1285,17 +1292,49 @@
                 // Free energy status
                 const freeEnergyItem = document.getElementById('freeEnergyItem');
                 const freeEnergyStatusEl = document.getElementById('freeEnergyStatus');
+                const freeEnergyChargeItem = document.getElementById('freeEnergyChargeItem');
+                const freeEnergyChargeStatus = document.getElementById('freeEnergyChargeStatus');
+                const freeEnergyChargeDetail = document.getElementById('freeEnergyChargeDetail');
+
                 if (data.free_energy && data.free_energy.enabled) {
                     freeEnergyItem.style.display = 'block';
+                    freeEnergyChargeItem.style.display = 'block';
+
+                    const targetSoc = data.free_energy.target_soc || 100;
+                    const currentSoc = state.soc || 0;
+                    const batteryPower = state.battery_power || 0;
+                    const isCharging = batteryPower < 0;
+
                     if (data.in_free_energy_window) {
                         freeEnergyStatusEl.textContent = 'ACTIVE';
                         freeEnergyStatusEl.className = 'value active';
+
+                        if (currentSoc >= targetSoc) {
+                            freeEnergyChargeStatus.textContent = 'COMPLETE';
+                            freeEnergyChargeStatus.className = 'value active';
+                            freeEnergyChargeDetail.textContent = `${currentSoc}% / ${targetSoc}%`;
+                        } else if (isCharging) {
+                            freeEnergyChargeStatus.textContent = 'CHARGING';
+                            freeEnergyChargeStatus.className = 'value charging';
+                            freeEnergyChargeDetail.textContent = `${currentSoc}% → ${targetSoc}%`;
+                        } else {
+                            freeEnergyChargeStatus.textContent = 'WAITING';
+                            freeEnergyChargeStatus.className = 'value inactive';
+                            freeEnergyChargeDetail.textContent = `${currentSoc}% / ${targetSoc}%`;
+                        }
                     } else {
                         freeEnergyStatusEl.textContent = 'OFF';
                         freeEnergyStatusEl.className = 'value inactive';
+                        freeEnergyChargeStatus.textContent = 'SCHEDULED';
+                        freeEnergyChargeStatus.className = 'value';
+                        freeEnergyChargeDetail.textContent = `${data.free_energy.start_time} - ${data.free_energy.end_time}`;
                     }
                 } else {
                     freeEnergyItem.style.display = 'none';
+                    freeEnergyChargeItem.style.display = 'block';
+                    freeEnergyChargeStatus.textContent = 'DISABLED';
+                    freeEnergyChargeStatus.className = 'value';
+                    freeEnergyChargeDetail.textContent = '';
                 }
 
                 updateSchedulerButtons(state.scheduler_status === 'running');
@@ -1477,8 +1516,8 @@
             let forecastHtml = '<div class="weather-container">';
             daily.forEach((day, index) => {
                 const classes = ['weather-day'];
-                if (day.is_today) classes.push('today');
-                if (day.is_bad_weather) classes.push('bad-weather');
+                // Only highlight future days for bad weather (not today) since discharge decision is based on future forecasts
+                if (!day.is_today && day.is_bad_weather) classes.push('bad-weather');
 
                 const dayName = day.is_today ? 'Today' : day.day_name.substring(0, 3);
                 const icon = getWeatherIcon(day.condition, day.icon);
