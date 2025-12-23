@@ -715,3 +715,508 @@ class TestSetTouSettingsWithFreeEnergy:
 
         for item in payload["timeUseSettingItems"]:
             assert item["enableGeneration"] is False
+
+
+class TestGetInverterCapacity:
+    """Tests for get_inverter_capacity method"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = DeyeCloudClient(
+            api_base_url="https://test-api.deyecloud.com",
+            app_id="test_app_id",
+            app_secret="test_secret",
+            email="test@test.com",
+            password="test_password",
+            device_sn="TEST123456"
+        )
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_rated_power(self, mock_latest):
+        """Test extracting inverter capacity from RATEDPOWER key"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "RATEDPOWER", "value": "5000"},
+                    {"key": "SOC", "value": "75"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 5000
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_rated_power_underscore(self, mock_latest):
+        """Test extracting inverter capacity from RATED_POWER key"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "RATED_POWER", "value": "8000"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 8000
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_inverterpower(self, mock_latest):
+        """Test extracting inverter capacity from INVERTERPOWER key"""
+        mock_latest.return_value = {
+            "code": 1000000,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "INVERTERPOWER", "value": "10000"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 10000
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_maxpower(self, mock_latest):
+        """Test extracting inverter capacity from MAXPOWER key"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "MAXPOWER", "value": "6000"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 6000
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_device_attributes(self, mock_latest):
+        """Test extracting inverter capacity from device attributes when not in dataList"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "ratedPower": "5500",
+                "dataList": [
+                    {"key": "SOC", "value": "75"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 5500
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_from_device_attributes_underscore(self, mock_latest):
+        """Test extracting from rated_power attribute"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "rated_power": "7000",
+                "dataList": []
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 7000
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_not_found(self, mock_latest):
+        """Test when inverter capacity is not in response"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "SOC", "value": "75"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result is None
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_empty_device_list(self, mock_latest):
+        """Test when deviceDataList is empty"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": []
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result is None
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_api_error(self, mock_latest):
+        """Test when API call fails"""
+        mock_latest.side_effect = Exception("API Error")
+
+        result = self.client.get_inverter_capacity()
+
+        assert result is None
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_failure_response(self, mock_latest):
+        """Test when API returns failure"""
+        mock_latest.return_value = {
+            "success": False,
+            "code": 500,
+            "msg": "Error"
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result is None
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_float_value(self, mock_latest):
+        """Test that float values are converted to int"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "RATEDPOWER", "value": "5000.5"}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result == 5000
+        assert isinstance(result, int)
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_inverter_capacity_empty_value(self, mock_latest):
+        """Test when value is empty string"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "RATEDPOWER", "value": ""}
+                ]
+            }]
+        }
+
+        result = self.client.get_inverter_capacity()
+
+        assert result is None
+
+
+class TestTokenHandlingEdgeCases:
+    """Additional edge case tests for token handling"""
+
+    @patch('deye_client.requests.post')
+    def test_token_near_expiry_refreshes(self, mock_post):
+        """Test that token is refreshed when near expiry (within 300s buffer)"""
+        client = DeyeCloudClient(
+            api_base_url="https://test.com",
+            app_id="id",
+            app_secret="secret",
+            email="email",
+            password="pass",
+            device_sn="sn"
+        )
+        # Token expires in 200 seconds (within 300s buffer)
+        client.access_token = "old_token"
+        client.token_expires_at = time.time() + 200
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "code": 0,  # Integer code
+            "data": {
+                "accessToken": "new_token",
+                "expiresIn": 86400
+            }
+        }
+        mock_post.return_value = mock_response
+
+        token = client._get_token()
+
+        assert token == "new_token"
+        mock_post.assert_called_once()
+
+    @patch('deye_client.requests.post')
+    def test_token_with_integer_code_zero(self, mock_post):
+        """Test token parsing with integer code 0"""
+        client = DeyeCloudClient(
+            api_base_url="https://test.com",
+            app_id="id",
+            app_secret="secret",
+            email="email",
+            password="pass",
+            device_sn="sn"
+        )
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "code": 0,  # Integer, not string
+            "data": {
+                "accessToken": "test_token",
+                "expiresIn": 3600
+            }
+        }
+        mock_post.return_value = mock_response
+
+        token = client._get_token()
+
+        assert token == "test_token"
+
+    @patch('deye_client.requests.post')
+    def test_token_with_null_code(self, mock_post):
+        """Test token parsing when code is null/None"""
+        client = DeyeCloudClient(
+            api_base_url="https://test.com",
+            app_id="id",
+            app_secret="secret",
+            email="email",
+            password="pass",
+            device_sn="sn"
+        )
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "code": None,
+            "data": {
+                "accessToken": "test_token",
+                "expiresIn": 3600
+            }
+        }
+        mock_post.return_value = mock_response
+
+        token = client._get_token()
+
+        assert token == "test_token"
+
+    @patch('deye_client.requests.post')
+    def test_token_http_error(self, mock_post):
+        """Test token request with HTTP error"""
+        client = DeyeCloudClient(
+            api_base_url="https://test.com",
+            app_id="id",
+            app_secret="secret",
+            email="email",
+            password="pass",
+            device_sn="sn"
+        )
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        mock_response.text = "Unauthorized"
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("401 Unauthorized")
+        mock_post.return_value = mock_response
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            client._get_token()
+
+    @patch('deye_client.requests.post')
+    def test_token_default_expiry(self, mock_post):
+        """Test token uses default expiry when not provided"""
+        client = DeyeCloudClient(
+            api_base_url="https://test.com",
+            app_id="id",
+            app_secret="secret",
+            email="email",
+            password="pass",
+            device_sn="sn"
+        )
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {
+            "code": "0",
+            "data": {
+                "accessToken": "test_token"
+                # No expiresIn - should use default 86400
+            }
+        }
+        mock_post.return_value = mock_response
+
+        token = client._get_token()
+
+        assert token == "test_token"
+        # Token should expire in ~86400 seconds (default)
+        assert client.token_expires_at > time.time() + 86000
+
+
+class TestMakeRequestEdgeCases:
+    """Additional edge case tests for _make_request"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = DeyeCloudClient(
+            api_base_url="https://test-api.deyecloud.com",
+            app_id="test_app_id",
+            app_secret="test_secret",
+            email="test@test.com",
+            password="test_password",
+            device_sn="TEST123456"
+        )
+
+    @patch.object(DeyeCloudClient, '_get_token')
+    @patch('deye_client.requests.get')
+    def test_make_request_http_error_logged(self, mock_get, mock_token):
+        """Test that HTTP errors are logged before raising"""
+        mock_token.return_value = "test_token"
+        mock_response = Mock()
+        mock_response.status_code = 500
+        mock_response.text = "Internal Server Error"
+        mock_response.raise_for_status.side_effect = requests.exceptions.HTTPError("500 Error")
+        mock_get.return_value = mock_response
+
+        with pytest.raises(requests.exceptions.HTTPError):
+            self.client._make_request("GET", "/test/endpoint")
+
+    @patch.object(DeyeCloudClient, '_get_token')
+    @patch('deye_client.requests.post')
+    def test_make_request_post_with_none_payload(self, mock_post, mock_token):
+        """Test POST request with None payload"""
+        mock_token.return_value = "test_token"
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {"success": True}
+        mock_post.return_value = mock_response
+
+        result = self.client._make_request("POST", "/test/endpoint", None)
+
+        assert result == {"success": True}
+        mock_post.assert_called_once()
+
+    @patch.object(DeyeCloudClient, '_get_token')
+    @patch('deye_client.requests.get')
+    def test_make_request_includes_auth_header(self, mock_get, mock_token):
+        """Test that Authorization header is included"""
+        mock_token.return_value = "bearer_token_123"
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = {"success": True}
+        mock_get.return_value = mock_response
+
+        self.client._make_request("GET", "/test/endpoint")
+
+        call_args = mock_get.call_args
+        headers = call_args.kwargs.get('headers', call_args[1].get('headers', {}))
+        assert headers.get("Authorization") == "Bearer bearer_token_123"
+        assert headers.get("Content-Type") == "application/json"
+
+
+class TestDeviceInfoCustomSn:
+    """Tests for get_device_info with custom device_sn"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = DeyeCloudClient(
+            api_base_url="https://test-api.deyecloud.com",
+            app_id="test_app_id",
+            app_secret="test_secret",
+            email="test@test.com",
+            password="test_password",
+            device_sn="DEFAULT_SN"
+        )
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_get_device_info_with_custom_sn(self, mock_request):
+        """Test get_device_info with custom device_sn parameter"""
+        mock_request.return_value = {"device": {"name": "Custom Device"}}
+
+        result = self.client.get_device_info(device_sn="CUSTOM_SN_123")
+
+        mock_request.assert_called_with("POST", "/v1.0/device/info", {"deviceSn": "CUSTOM_SN_123"})
+
+    @patch.object(DeyeCloudClient, '_make_request')
+    def test_get_device_info_default_sn(self, mock_request):
+        """Test get_device_info uses default device_sn when not provided"""
+        mock_request.return_value = {"device": {}}
+
+        result = self.client.get_device_info()
+
+        mock_request.assert_called_with("POST", "/v1.0/device/info", {"deviceSn": "DEFAULT_SN"})
+
+
+class TestBatteryInfoKeyVariations:
+    """Tests for get_battery_info with various key formats"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = DeyeCloudClient(
+            api_base_url="https://test-api.deyecloud.com",
+            app_id="test_app_id",
+            app_secret="test_secret",
+            email="test@test.com",
+            password="test_password",
+            device_sn="TEST123456"
+        )
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_battery_info_lowercase_keys(self, mock_latest):
+        """Test get_battery_info with lowercase keys"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "soc", "value": "65.5"},
+                    {"key": "batterypower", "value": "2500"}
+                ]
+            }]
+        }
+
+        result = self.client.get_battery_info()
+
+        assert result["soc"] == 65.5
+        assert result["power"] == 2500.0
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_battery_info_mixed_case_keys(self, mock_latest):
+        """Test get_battery_info with mixed case keys"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": "Soc", "value": "70"},
+                    {"key": "BatteryPOWER", "value": "1800"}
+                ]
+            }]
+        }
+
+        result = self.client.get_battery_info()
+
+        assert result["soc"] == 70.0
+        assert result["power"] == 1800.0
+
+    @patch.object(DeyeCloudClient, 'get_device_latest_data')
+    def test_get_battery_info_none_key(self, mock_latest):
+        """Test get_battery_info when key is None"""
+        mock_latest.return_value = {
+            "success": True,
+            "deviceDataList": [{
+                "dataList": [
+                    {"key": None, "value": "70"},
+                    {"key": "SOC", "value": "80"}
+                ]
+            }]
+        }
+
+        result = self.client.get_battery_info()
+
+        assert result["soc"] == 80.0
+
+
+import requests

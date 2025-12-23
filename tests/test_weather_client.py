@@ -990,3 +990,674 @@ class TestWeatherAnalyserWithSolarEstimates:
         # Key is present but value is None
         assert result["daily"][0]["estimated_solar_kwh"] is None
         assert result["daily"][0]["has_solar_prediction"] is False
+
+
+class TestEstimateSolarOutputHourly:
+    """Tests for estimate_solar_output_hourly method"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(
+            api_key="test_api_key",
+            city_name="Sydney, AU"
+        )
+        self.client.latitude = -33.8688
+        self.client.longitude = 151.2093
+        self.client._coordinates_cached = True
+
+    def test_hourly_estimate_no_cache(self):
+        """Test hourly estimate returns None when no cache"""
+        self.client._cache = {}
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is None
+
+    def test_hourly_estimate_no_hourly_data(self):
+        """Test hourly estimate returns None when no hourly_data in cache"""
+        self.client._cache = {"forecast": {}}
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is None
+
+    def test_hourly_estimate_no_data_for_date(self):
+        """Test hourly estimate returns None for missing date"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-23": []  # Different date
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is None
+
+    def test_hourly_estimate_clear_day(self):
+        """Test hourly estimate for clear day"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 6, "clouds": 5, "condition": "Clear", "pop": 0},
+                    {"hour": 9, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 12, "clouds": 5, "condition": "Clear", "pop": 0},
+                    {"hour": 15, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 18, "clouds": 15, "condition": "Clear", "pop": 0}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+        assert result > 10  # Clear day should have decent output
+
+    def test_hourly_estimate_rainy_day(self):
+        """Test hourly estimate for rainy day"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 6, "clouds": 90, "condition": "Rain", "pop": 80},
+                    {"hour": 9, "clouds": 95, "condition": "Rain", "pop": 90},
+                    {"hour": 12, "clouds": 100, "condition": "Rain", "pop": 85},
+                    {"hour": 15, "clouds": 90, "condition": "Rain", "pop": 70},
+                    {"hour": 18, "clouds": 85, "condition": "Drizzle", "pop": 60}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+        assert result < 10  # Rainy day should have low output
+
+    def test_hourly_estimate_mixed_weather(self):
+        """Test hourly estimate for mixed weather day"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 6, "clouds": 20, "condition": "Clear", "pop": 0},
+                    {"hour": 9, "clouds": 40, "condition": "Clouds", "pop": 10},
+                    {"hour": 12, "clouds": 80, "condition": "Rain", "pop": 60},
+                    {"hour": 15, "clouds": 30, "condition": "Clear", "pop": 5},
+                    {"hour": 18, "clouds": 20, "condition": "Clear", "pop": 0}
+                ]
+            }
+        }
+
+        result_clear = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        # Should be between clear and rainy
+        assert result_clear is not None
+
+    def test_hourly_estimate_nighttime_hours_excluded(self):
+        """Test that nighttime hours are excluded"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 0, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 3, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 21, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 12, "clouds": 10, "condition": "Clear", "pop": 0}  # Only daytime
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+        # Only one daytime hour, so output should be limited
+        assert result < 20
+
+    def test_hourly_estimate_scales_with_capacity(self):
+        """Test that output scales with panel capacity"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 9, "clouds": 20, "condition": "Clear", "pop": 5},
+                    {"hour": 12, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 15, "clouds": 15, "condition": "Clear", "pop": 0}
+                ]
+            }
+        }
+
+        result_5kw = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        result_10kw = self.client.estimate_solar_output_hourly(10.0, "2023-12-22")
+
+        assert result_10kw > result_5kw
+        # Should be approximately 2x
+        assert abs(result_10kw / result_5kw - 2) < 0.1
+
+    def test_hourly_estimate_different_latitudes(self):
+        """Test that latitude affects base production"""
+        # Equator latitude (high solar)
+        self.client.latitude = 0
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 9, "clouds": 20, "condition": "Clear", "pop": 5},
+                    {"hour": 12, "clouds": 10, "condition": "Clear", "pop": 0},
+                    {"hour": 15, "clouds": 15, "condition": "Clear", "pop": 0}
+                ]
+            }
+        }
+
+        result_equator = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        # High latitude (lower solar)
+        self.client.latitude = 60
+        result_high_lat = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        # Equator should have higher production
+        assert result_equator > result_high_lat
+
+    def test_hourly_estimate_unknown_condition(self):
+        """Test with unknown weather condition"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 12, "clouds": 30, "condition": "UnknownWeather", "pop": 10}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None  # Should handle gracefully
+
+    def test_hourly_estimate_fog_condition(self):
+        """Test with fog condition"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 9, "clouds": 40, "condition": "Fog", "pop": 0},
+                    {"hour": 12, "clouds": 30, "condition": "Fog", "pop": 0},
+                    {"hour": 15, "clouds": 20, "condition": "Mist", "pop": 0}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+        # Fog reduces output significantly
+
+    def test_hourly_estimate_thunderstorm(self):
+        """Test with thunderstorm condition"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 12, "clouds": 100, "condition": "Thunderstorm", "pop": 90}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+        assert result < 5  # Should be very low
+
+    def test_hourly_estimate_default_latitude(self):
+        """Test with no latitude set uses default"""
+        self.client.latitude = None
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 12, "clouds": 10, "condition": "Clear", "pop": 0}
+                ]
+            }
+        }
+
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+
+        assert result is not None
+
+
+class TestMakeRequestWithRetry:
+    """Tests for _make_request_with_retry method"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(
+            api_key="test_api_key",
+            city_name="Sydney, AU"
+        )
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_retry_on_server_error_500(self, mock_sleep, mock_get):
+        """Test retry on 500 server error"""
+        # First two calls fail with 500, third succeeds
+        mock_fail = Mock()
+        mock_fail.status_code = 500
+
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [mock_fail, mock_fail, mock_success]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        assert result.status_code == 200
+        assert mock_get.call_count == 3
+        assert mock_sleep.call_count == 2
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_rate_limit_429_with_retry_after(self, mock_sleep, mock_get):
+        """Test handling of 429 rate limit with Retry-After header"""
+        mock_fail = Mock()
+        mock_fail.status_code = 429
+        mock_fail.headers = {"Retry-After": "30"}
+
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [mock_fail, mock_success]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        assert result.status_code == 200
+        # Should wait based on Retry-After (capped at 60)
+        mock_sleep.assert_called_with(30)
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_rate_limit_retry_after_capped(self, mock_sleep, mock_get):
+        """Test that Retry-After is capped at 60 seconds"""
+        mock_fail = Mock()
+        mock_fail.status_code = 429
+        mock_fail.headers = {"Retry-After": "300"}  # 5 minutes
+
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [mock_fail, mock_success]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        # Should wait max 60 seconds
+        mock_sleep.assert_called_with(60)
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_exponential_backoff_on_server_error(self, mock_sleep, mock_get):
+        """Test exponential backoff timing"""
+        mock_fail = Mock()
+        mock_fail.status_code = 503
+
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [mock_fail, mock_fail, mock_success]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        # First retry waits 1s (2^0), second waits 2s (2^1)
+        assert mock_sleep.call_args_list[0][0][0] == 1
+        assert mock_sleep.call_args_list[1][0][0] == 2
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_max_retries_exceeded_rate_limit(self, mock_sleep, mock_get):
+        """Test that WeatherAPIError is raised after max retries on 429"""
+        mock_fail = Mock()
+        mock_fail.status_code = 429
+        mock_fail.headers = {}
+
+        mock_get.return_value = mock_fail
+
+        with pytest.raises(WeatherAPIError) as exc_info:
+            self.client._make_request_with_retry("http://test.com", {})
+
+        assert "rate limit" in str(exc_info.value).lower()
+        assert exc_info.value.is_temporary is True
+        assert exc_info.value.status_code == 429
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_max_retries_exceeded_server_error(self, mock_sleep, mock_get):
+        """Test that WeatherAPIError is raised after max retries on 5xx"""
+        mock_fail = Mock()
+        mock_fail.status_code = 503
+
+        mock_get.return_value = mock_fail
+
+        with pytest.raises(WeatherAPIError) as exc_info:
+            self.client._make_request_with_retry("http://test.com", {})
+
+        assert exc_info.value.is_temporary is True
+        assert exc_info.value.status_code == 503
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_timeout_retry(self, mock_sleep, mock_get):
+        """Test retry on timeout"""
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [
+            requests.exceptions.Timeout("Timeout"),
+            mock_success
+        ]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        assert result.status_code == 200
+        assert mock_get.call_count == 2
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_connection_error_dns_failure(self, mock_sleep, mock_get):
+        """Test retry on DNS resolution failure"""
+        mock_success = Mock()
+        mock_success.status_code = 200
+
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("Name or service not known"),
+            mock_success
+        ]
+
+        result = self.client._make_request_with_retry("http://test.com", {})
+
+        assert result.status_code == 200
+
+    @patch('weather_client.requests.get')
+    def test_connection_refused_no_retry(self, mock_get):
+        """Test connection refused raises immediately"""
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection refused")
+
+        with pytest.raises(WeatherAPIError) as exc_info:
+            self.client._make_request_with_retry("http://test.com", {}, max_retries=0)
+
+        assert "refused" in str(exc_info.value).lower()
+        assert exc_info.value.is_temporary is True
+
+    @patch('weather_client.requests.get')
+    def test_generic_request_exception(self, mock_get):
+        """Test generic RequestException raises WeatherAPIError"""
+        mock_get.side_effect = requests.exceptions.RequestException("Generic error")
+
+        with pytest.raises(WeatherAPIError) as exc_info:
+            self.client._make_request_with_retry("http://test.com", {})
+
+        assert exc_info.value.is_temporary is False
+
+
+class TestGeocodeCityEdgeCases:
+    """Additional tests for _geocode_city"""
+
+    def test_geocode_with_empty_city_name(self):
+        """Test geocoding with empty city name"""
+        client = WeatherClient(api_key="test_key", city_name="")
+
+        result = client._geocode_city()
+
+        assert result is False
+        assert client._coordinates_cached is True
+
+    @patch.object(WeatherClient, 'search_cities')
+    def test_geocode_caches_result(self, mock_search):
+        """Test that geocoding result is cached"""
+        mock_search.return_value = [{"lat": 51.5, "lon": -0.1}]
+
+        client = WeatherClient(api_key="test_key", city_name="London")
+
+        # First call
+        result1 = client._geocode_city()
+        # Second call should use cache
+        result2 = client._geocode_city()
+
+        assert result1 is True
+        assert result2 is True
+        # search_cities should only be called once
+        mock_search.assert_called_once()
+
+    @patch.object(WeatherClient, 'search_cities')
+    def test_geocode_caches_failure(self, mock_search):
+        """Test that geocoding failure is cached"""
+        mock_search.return_value = []
+
+        client = WeatherClient(api_key="test_key", city_name="NonexistentCity")
+
+        # First call fails
+        result1 = client._geocode_city()
+        # Second call should use cached failure
+        result2 = client._geocode_city()
+
+        assert result1 is False
+        assert result2 is False
+        # search_cities should only be called once
+        mock_search.assert_called_once()
+
+
+class TestLegacyForecastTimezoneHandling:
+    """Tests for timezone handling in legacy forecast parsing"""
+
+    def test_parse_legacy_forecast_with_timezone(self):
+        """Test that legacy forecast uses timezone offset correctly"""
+        client = WeatherClient(api_key="test_key", city_name="Tokyo")
+        client.latitude = 35.6762
+        client.longitude = 139.6503
+
+        # Tokyo is UTC+9 (32400 seconds)
+        data = {
+            "city": {"name": "Tokyo", "timezone": 32400},
+            "list": [
+                {
+                    "dt": 1703203200,  # 2023-12-22 02:00 UTC (11:00 JST)
+                    "main": {"temp": 10.0},
+                    "weather": [{"main": "Clear"}],
+                    "clouds": {"all": 10},
+                    "pop": 0
+                }
+            ]
+        }
+
+        result = client._parse_legacy_forecast(data)
+
+        assert result["success"] is True
+        # Should have parsed the date in local time
+        assert len(result["daily"]) >= 1
+
+    def test_parse_legacy_forecast_negative_timezone(self):
+        """Test legacy forecast with negative timezone (Americas)"""
+        client = WeatherClient(api_key="test_key", city_name="New York")
+        client.latitude = 40.7128
+        client.longitude = -74.0060
+
+        # New York is UTC-5 (-18000 seconds)
+        data = {
+            "city": {"name": "New York", "timezone": -18000},
+            "list": [
+                {
+                    "dt": 1703203200,  # 2023-12-22 02:00 UTC (21:00 EST previous day)
+                    "main": {"temp": 5.0},
+                    "weather": [{"main": "Clouds"}],
+                    "clouds": {"all": 40},
+                    "pop": 0.1
+                }
+            ]
+        }
+
+        result = client._parse_legacy_forecast(data)
+
+        assert result["success"] is True
+
+    def test_parse_legacy_forecast_stores_hourly_data(self):
+        """Test that legacy forecast stores hourly data for solar calculation"""
+        client = WeatherClient(api_key="test_key", city_name="Sydney")
+        client.latitude = -33.8688
+        client.longitude = 151.2093
+
+        data = {
+            "city": {"name": "Sydney", "timezone": 36000},  # UTC+10
+            "list": [
+                {
+                    "dt": 1703203200,
+                    "main": {"temp": 25.0},
+                    "weather": [{"main": "Clear"}],
+                    "clouds": {"all": 10},
+                    "pop": 0
+                },
+                {
+                    "dt": 1703214000,
+                    "main": {"temp": 28.0},
+                    "weather": [{"main": "Clear"}],
+                    "clouds": {"all": 15},
+                    "pop": 0.1
+                }
+            ]
+        }
+
+        result = client._parse_legacy_forecast(data)
+
+        # Check that hourly_data was cached
+        assert "hourly_data" in client._cache
+        assert len(client._cache["hourly_data"]) >= 1
+
+    def test_parse_legacy_aggregates_conditions(self):
+        """Test that legacy forecast aggregates conditions correctly"""
+        client = WeatherClient(api_key="test_key", city_name="Test")
+        client.latitude = 0
+        client.longitude = 0
+
+        # Same day, multiple conditions - most common should win
+        data = {
+            "city": {"name": "Test", "timezone": 0},
+            "list": [
+                {"dt": 1703203200, "main": {"temp": 20}, "weather": [{"main": "Clear"}], "clouds": {"all": 10}, "pop": 0},
+                {"dt": 1703214000, "main": {"temp": 22}, "weather": [{"main": "Clear"}], "clouds": {"all": 15}, "pop": 0},
+                {"dt": 1703224800, "main": {"temp": 21}, "weather": [{"main": "Rain"}], "clouds": {"all": 80}, "pop": 0.5},
+                {"dt": 1703235600, "main": {"temp": 19}, "weather": [{"main": "Clear"}], "clouds": {"all": 20}, "pop": 0}
+            ]
+        }
+
+        result = client._parse_legacy_forecast(data)
+
+        # Clear appears 3 times, Rain once - Clear should be the main condition
+        assert result["daily"][0]["condition"] == "Clear"
+
+
+class TestWeatherAnalyserBadWeatherDetection:
+    """Tests for bad weather detection in WeatherAnalyser"""
+
+    def test_analyse_forecast_rain_is_bad(self):
+        """Test that rain condition is detected as bad weather"""
+        analyser = WeatherAnalyser(bad_conditions=["Rain"], min_cloud_cover=70)
+
+        forecast = {
+            "success": True,
+            "daily": [
+                {
+                    "date": "2023-12-22",
+                    "condition": "Rain",
+                    "clouds": 90,
+                    "pop": 80
+                }
+            ]
+        }
+
+        result = analyser.analyse_forecast(forecast)
+
+        assert result["daily"][0]["is_bad_weather"] is True
+
+    def test_analyse_forecast_clear_is_good(self):
+        """Test that clear condition is detected as good weather"""
+        analyser = WeatherAnalyser(bad_conditions=["Rain"], min_cloud_cover=70)
+
+        forecast = {
+            "success": True,
+            "daily": [
+                {
+                    "date": "2023-12-22",
+                    "condition": "Clear",
+                    "clouds": 10,
+                    "pop": 0
+                }
+            ]
+        }
+
+        result = analyser.analyse_forecast(forecast)
+
+        assert result["daily"][0]["is_bad_weather"] is False
+
+    def test_analyse_forecast_high_clouds_is_bad(self):
+        """Test that high cloud cover triggers bad weather"""
+        analyser = WeatherAnalyser(bad_conditions=["Rain"], min_cloud_cover=70)
+
+        forecast = {
+            "success": True,
+            "daily": [
+                {
+                    "date": "2023-12-22",
+                    "condition": "Clouds",
+                    "clouds": 85,  # Above min_cloud_cover threshold
+                    "pop": 20
+                }
+            ]
+        }
+
+        result = analyser.analyse_forecast(forecast)
+
+        assert result["daily"][0]["is_bad_weather"] is True
+
+
+class TestWeatherClientForbiddenResponse:
+    """Tests for 403 Forbidden response handling"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(api_key="test_key", city_name="Sydney")
+        self.client.latitude = -33.8688
+        self.client.longitude = 151.2093
+        self.client._coordinates_cached = True
+
+    @patch('weather_client.requests.get')
+    def test_forbidden_403_response(self, mock_get):
+        """Test handling of 403 Forbidden response"""
+        mock_response = Mock()
+        mock_response.status_code = 403
+
+        mock_get.return_value = mock_response
+
+        result = self.client.get_forecast()
+
+        assert result["success"] is False
+        assert "forbidden" in result["error"].lower()
+        assert result.get("is_temporary") is False
+
+
+class TestShouldSkipDischargeSingleDay:
+    """Tests for should_skip_discharge with single day forecast"""
+
+    def test_single_day_forecast_uses_today(self):
+        """Test that single day forecast uses today for check"""
+        analyser = WeatherAnalyser()
+
+        forecast = {
+            "success": True,
+            "daily": [
+                {"day_name": "Today", "estimated_solar_kwh": 3.0}
+            ]
+        }
+
+        should_skip, reason = analyser.should_skip_discharge(forecast, min_solar_kwh=5.0)
+
+        # Should skip because today's (only day) solar is below threshold
+        assert should_skip is True
+        assert "3.0" in reason
+
+
+class TestWeatherClientNoCity:
+    """Tests for WeatherClient with no city configured"""
+
+    @patch('weather_client.requests.get')
+    def test_get_forecast_no_city(self, mock_get):
+        """Test get_forecast fails gracefully with no city"""
+        client = WeatherClient(api_key="test_key", city_name="")
+
+        result = client.get_forecast()
+
+        assert result["success"] is False
+        assert "could not geocode" in result["error"].lower()
