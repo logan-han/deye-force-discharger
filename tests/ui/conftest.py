@@ -9,7 +9,7 @@ from unittest.mock import Mock, patch
 def find_free_port():
     """Find an available port for the test server"""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(('', 0))
+        s.bind(('127.0.0.1', 0))  # Bind to localhost only, not all interfaces
         s.listen(1)
         port = s.getsockname()[1]
     return port

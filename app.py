@@ -540,12 +540,14 @@ def test_deye_connection():
         if status_code == 401:
             error_msg = "Authentication failed. Check your App ID, App Secret, email and password."
         elif status_code == 404:
-            error_msg = f"API endpoint not found (404). Check the API base URL is correct for your region."
+            error_msg = "API endpoint not found (404). Check the API base URL is correct for your region."
         else:
-            error_msg = f"HTTP error {status_code}: {str(e)}"
+            logger.error(f"HTTP error testing Deye connection: {e}")
+            error_msg = f"HTTP error {status_code}. Check logs for details."
         return jsonify({"success": False, "error": error_msg})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        logger.error(f"Error testing Deye connection: {e}")
+        return jsonify({"success": False, "error": "Connection test failed. Check logs for details."})
 
 
 @app.route('/api/setup/test-weather', methods=['POST'])
@@ -571,9 +573,10 @@ def test_weather_connection():
                 "success": False,
                 "error": "API key test failed. Please check your key."
             })
-            
+
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        logger.error(f"Error testing weather connection: {e}")
+        return jsonify({"success": False, "error": "Weather API test failed. Check logs for details."})
 
 
 @app.route('/api/setup/search-cities')
@@ -652,7 +655,8 @@ def complete_setup():
         return jsonify({"success": True, "message": "Setup completed successfully!"})
 
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)})
+        logger.error(f"Error completing setup: {e}")
+        return jsonify({"success": False, "error": "Setup failed. Check logs for details."})
 
 
 @app.route('/')
@@ -716,7 +720,8 @@ def get_device_info():
         data = client.get_device_latest_data()
         return jsonify({"success": True, "data": data})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting device info: {e}")
+        return jsonify({"success": False, "error": "Failed to get device info. Check logs for details."}), 500
 
 
 @app.route('/api/work-mode')
@@ -726,7 +731,8 @@ def get_work_mode():
         data = client.get_work_mode()
         return jsonify({"success": True, "data": data})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting work mode: {e}")
+        return jsonify({"success": False, "error": "Failed to get work mode. Check logs for details."}), 500
 
 
 @app.route('/api/work-mode', methods=['POST'])
@@ -746,7 +752,8 @@ def set_work_mode():
         else:
             return jsonify({"success": False, "error": result.get("msg", "Unknown error")}), 400
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error setting work mode: {e}")
+        return jsonify({"success": False, "error": "Failed to set work mode. Check logs for details."}), 500
 
 
 @app.route('/api/tou')
@@ -756,7 +763,8 @@ def get_tou():
         data = client.get_tou_settings()
         return jsonify({"success": True, "data": data})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting TOU settings: {e}")
+        return jsonify({"success": False, "error": "Failed to get TOU settings. Check logs for details."}), 500
 
 
 @app.route('/api/config')
@@ -815,7 +823,8 @@ def update_config():
 
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error updating config: {e}")
+        return jsonify({"success": False, "error": "Failed to update config. Check logs for details."}), 500
 
 
 @app.route('/api/scheduler/start', methods=['POST'])
@@ -840,7 +849,8 @@ def get_soc():
         soc = client.get_soc()
         return jsonify({"success": True, "soc": soc})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error getting SoC: {e}")
+        return jsonify({"success": False, "error": "Failed to get battery SoC. Check logs for details."}), 500
 
 
 @app.route('/api/weather')
@@ -958,7 +968,8 @@ def update_weather_config():
 
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error updating weather config: {e}")
+        return jsonify({"success": False, "error": "Failed to update weather config. Check logs for details."}), 500
 
 
 @app.route('/api/free-energy/config')
@@ -1027,7 +1038,8 @@ def update_free_energy_config():
 
         return jsonify({"success": True})
     except Exception as e:
-        return jsonify({"success": False, "error": str(e)}), 500
+        logger.error(f"Error updating free energy config: {e}")
+        return jsonify({"success": False, "error": "Failed to update free energy config. Check logs for details."}), 500
 
 
 if __name__ == '__main__':

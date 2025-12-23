@@ -2888,7 +2888,8 @@ class TestSetupEndpointsEdgeCases:
 
         assert response.status_code == 200
         assert data["success"] is False
-        assert "Connection failed" in data["error"]
+        # Error message should not expose internal exception details (security fix)
+        assert "Connection test failed" in data["error"]
 
     @patch('app.WeatherClient.search_cities')
     def test_test_weather_exception(self, mock_search, test_client):

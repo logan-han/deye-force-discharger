@@ -521,7 +521,8 @@ class TestWeatherClientAPIDown:
         result = self.client.get_forecast()
 
         assert result["success"] is False
-        assert "timed out" in result["error"].lower()
+        # Error message should not expose internal details (security fix)
+        assert "check logs" in result["error"].lower()
         assert result.get("is_temporary") is True
 
     @patch('weather_client.requests.get')
@@ -534,7 +535,8 @@ class TestWeatherClientAPIDown:
         result = self.client.get_forecast()
 
         assert result["success"] is False
-        assert "dns" in result["error"].lower() or "hostname" in result["error"].lower()
+        # Error message should not expose internal details (security fix)
+        assert "check logs" in result["error"].lower()
         assert result.get("is_temporary") is True
 
     @patch('weather_client.requests.get')
@@ -547,7 +549,8 @@ class TestWeatherClientAPIDown:
         result = self.client.get_forecast()
 
         assert result["success"] is False
-        assert "refused" in result["error"].lower() or "connect" in result["error"].lower()
+        # Error message should not expose internal details (security fix)
+        assert "check logs" in result["error"].lower()
         assert result.get("is_temporary") is True
 
     @patch('weather_client.requests.get')
@@ -561,7 +564,8 @@ class TestWeatherClientAPIDown:
         result = self.client.get_forecast()
 
         assert result["success"] is False
-        assert "server error" in result["error"].lower() or "503" in result["error"]
+        # Error message should not expose internal details (security fix)
+        assert "check logs" in result["error"].lower()
         assert result.get("is_temporary") is True
         # Should have retried
         assert mock_get.call_count >= 2
@@ -578,7 +582,8 @@ class TestWeatherClientAPIDown:
         result = self.client.get_forecast()
 
         assert result["success"] is False
-        assert "rate limit" in result["error"].lower()
+        # Error message should not expose internal details (security fix)
+        assert "check logs" in result["error"].lower()
         assert result.get("is_temporary") is True
 
     @patch('weather_client.requests.get')

@@ -52,7 +52,7 @@ class WeatherClient:
 
         self.latitude = cities[0]["lat"]
         self.longitude = cities[0]["lon"]
-        logger.info(f"Geocoded {self.city_name} to ({self.latitude}, {self.longitude})")
+        logger.info(f"Geocoded {self.city_name} successfully")
         return True
 
     @staticmethod
@@ -392,7 +392,7 @@ class WeatherClient:
             logger.error(f"Weather API error: {e}")
             return {
                 "success": False,
-                "error": str(e),
+                "error": "Weather API error. Check logs for details.",
                 "daily": [],
                 "is_temporary": e.is_temporary
             }
@@ -400,7 +400,7 @@ class WeatherClient:
             logger.error(f"HTTP error fetching weather: {e}")
             return {
                 "success": False,
-                "error": f"OpenWeatherMap API returned an error: {e}",
+                "error": "OpenWeatherMap API returned an error. Check logs for details.",
                 "daily": [],
                 "is_temporary": False
             }
@@ -408,7 +408,7 @@ class WeatherClient:
             logger.error(f"Unexpected error fetching weather forecast: {e}")
             return {
                 "success": False,
-                "error": f"Unexpected error: {e}",
+                "error": "Unexpected error fetching forecast. Check logs for details.",
                 "daily": [],
                 "is_temporary": False
             }
