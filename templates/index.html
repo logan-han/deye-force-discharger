@@ -420,6 +420,29 @@
             color: #4ecca3;
             text-decoration: none;
         }
+        .city-dropdown {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
+            background: #0d1321;
+            border: 1px solid #2a3f5f;
+            border-radius: 4px;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 100;
+            display: none;
+        }
+        .city-dropdown.show { display: block; }
+        .city-option {
+            padding: 8px 12px;
+            cursor: pointer;
+            font-size: 0.8rem;
+            border-bottom: 1px solid #2a3f5f;
+        }
+        .city-option:hover { background: #1a1a2e; }
+        .city-option:last-child { border-bottom: none; }
+        .solar-estimate { font-size: 0.6rem; color: #ffc107; margin-top: 2px; }
         .weather-settings-toggle {
             float: right;
             font-size: 0.7rem;
@@ -447,9 +470,174 @@
             flex-wrap: wrap;
             margin-bottom: 10px;
         }
+
+        /* Setup Modal */
+        .setup-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.9);
+            z-index: 1000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .setup-modal {
+            background: #16213e;
+            border-radius: 12px;
+            padding: 30px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 90vh;
+            overflow-y: auto;
+        }
+        .setup-modal h2 {
+            margin: 0 0 20px 0;
+            color: #4ecca3;
+        }
+        .setup-step { display: none; }
+        .setup-step.active { display: block; }
+        .setup-field { margin-bottom: 15px; }
+        .setup-field label {
+            display: block;
+            margin-bottom: 5px;
+            color: #8892b0;
+            font-size: 0.9rem;
+        }
+        .setup-field input, .setup-field select {
+            width: 100%;
+            padding: 10px;
+            border: 1px solid #2a3f5f;
+            border-radius: 4px;
+            background: #0d1321;
+            color: #e6e6e6;
+            font-size: 1rem;
+        }
+        .setup-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .setup-buttons .btn { flex: 1; }
+        .test-result {
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            font-size: 0.9rem;
+        }
+        .test-result.success { background: rgba(78, 204, 163, 0.2); color: #4ecca3; }
+        .test-result.error { background: rgba(255, 82, 82, 0.2); color: #ff5252; }
+        .setup-progress {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        .progress-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: #2a3f5f;
+        }
+        .progress-dot.active { background: #4ecca3; }
+        .progress-dot.completed { background: #4ecca3; }
     </style>
 </head>
 <body>
+    <!-- Setup Modal -->
+    <div class="setup-overlay" id="setupOverlay" style="display: none;">
+        <div class="setup-modal">
+            <div class="setup-progress">
+                <div class="progress-dot active" id="dot1"></div>
+                <div class="progress-dot" id="dot2"></div>
+                <div class="progress-dot" id="dot3"></div>
+            </div>
+
+            <!-- Step 1: Deye API -->
+            <div class="setup-step active" id="setupStep1">
+                <h2>Deye Cloud Setup</h2>
+                <p style="color: #8892b0; margin-bottom: 20px;">Enter your Deye Cloud API credentials from the Deye Developer Portal.</p>
+
+                <div class="setup-field">
+                    <label>API Base URL</label>
+                    <select id="setupApiUrl">
+                        <option value="https://eu1-developer.deyecloud.com">EU (eu1-developer.deyecloud.com)</option>
+                        <option value="https://us1-developer.deyecloud.com">US (us1-developer.deyecloud.com)</option>
+                        <option value="https://as1-developer.deyecloud.com">Asia (as1-developer.deyecloud.com)</option>
+                    </select>
+                </div>
+                <div class="setup-field">
+                    <label>App ID</label>
+                    <input type="text" id="setupAppId" placeholder="Your App ID">
+                </div>
+                <div class="setup-field">
+                    <label>App Secret</label>
+                    <input type="password" id="setupAppSecret" placeholder="Your App Secret">
+                </div>
+                <div class="setup-field">
+                    <label>Email</label>
+                    <input type="email" id="setupEmail" placeholder="Your Deye account email">
+                </div>
+                <div class="setup-field">
+                    <label>Password</label>
+                    <input type="password" id="setupPassword" placeholder="Your Deye account password">
+                </div>
+                <div class="setup-field">
+                    <label>Device Serial Number</label>
+                    <input type="text" id="setupDeviceSn" placeholder="Your inverter serial number">
+                </div>
+
+                <div id="deyeTestResult" class="test-result" style="display: none;"></div>
+
+                <div class="setup-buttons">
+                    <button type="button" class="btn btn-secondary" onclick="testDeyeConnection()">Test Connection</button>
+                    <button type="button" class="btn btn-primary" onclick="goToStep(2)">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 2: Weather (Optional) -->
+            <div class="setup-step" id="setupStep2">
+                <h2>Weather Integration (Optional)</h2>
+                <p style="color: #8892b0; margin-bottom: 20px;">Add OpenWeatherMap to skip discharge on cloudy days. Get a free API key from openweathermap.org</p>
+
+                <div class="setup-field">
+                    <label>OpenWeatherMap API Key</label>
+                    <input type="text" id="setupWeatherKey" placeholder="Your API key (optional)">
+                </div>
+
+                <div id="weatherTestResult" class="test-result" style="display: none;"></div>
+
+                <div class="setup-buttons">
+                    <button type="button" class="btn btn-secondary" onclick="goToStep(1)">Back</button>
+                    <button type="button" class="btn btn-secondary" onclick="testWeatherConnection()">Test API Key</button>
+                    <button type="button" class="btn btn-primary" onclick="goToStep(3)">Next</button>
+                </div>
+            </div>
+
+            <!-- Step 3: Solar Capacity -->
+            <div class="setup-step" id="setupStep3">
+                <h2>Solar System Details</h2>
+                <p style="color: #8892b0; margin-bottom: 20px;">Enter your solar capacity for energy estimates. Use inverter capacity if panel capacity is unknown.</p>
+
+                <div class="setup-field">
+                    <label>Inverter Capacity (kW)</label>
+                    <input type="number" id="setupInverterCapacity" placeholder="e.g. 5" min="0" step="0.1">
+                </div>
+                <div class="setup-field">
+                    <label>Panel Capacity (kW, optional override)</label>
+                    <input type="number" id="setupPanelCapacity" placeholder="Leave blank to use inverter capacity" min="0" step="0.1">
+                </div>
+
+                <div class="setup-buttons">
+                    <button type="button" class="btn btn-secondary" onclick="goToStep(2)">Back</button>
+                    <button type="button" class="btn btn-primary" onclick="completeSetup()">Complete Setup</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="container">
         <h1>Deye Force Discharger <span class="refresh-indicator" id="refreshIndicator"></span></h1>
 
@@ -551,13 +739,13 @@
                         </div>
                     </div>
                     <div class="weather-settings-row">
-                        <div class="setting-item">
-                            <label>Latitude</label>
-                            <input type="number" id="weatherLat" step="0.0001" placeholder="-33.8688">
-                        </div>
-                        <div class="setting-item">
-                            <label>Longitude</label>
-                            <input type="number" id="weatherLon" step="0.0001" placeholder="151.2093">
+                        <div class="setting-item" style="flex: 2; position: relative;">
+                            <label>City</label>
+                            <input type="text" id="weatherCity" placeholder="Search city..." autocomplete="off">
+                            <input type="hidden" id="weatherLat">
+                            <input type="hidden" id="weatherLon">
+                            <input type="hidden" id="weatherCityName">
+                            <div id="cityDropdown" class="city-dropdown"></div>
                         </div>
                         <div class="setting-item">
                             <label>Bad Days Threshold</label>
@@ -566,6 +754,16 @@
                         <div class="setting-item">
                             <label>Cloud Cover %</label>
                             <input type="number" id="weatherCloudCover" min="0" max="100" value="70">
+                        </div>
+                    </div>
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>Inverter Capacity (kW)</label>
+                            <input type="number" id="weatherInverterCapacity" min="0" max="100" step="0.1" value="0" placeholder="e.g. 5">
+                        </div>
+                        <div class="setting-item">
+                            <label>Panel Capacity (kW, optional)</label>
+                            <input type="number" id="weatherPanelCapacity" min="0" max="100" step="0.1" value="0" placeholder="Override if known">
                         </div>
                     </div>
                     <div class="weather-settings-row">
@@ -1038,6 +1236,7 @@
                 const tempMin = day.temp_min !== null ? Math.round(day.temp_min) : '--';
                 const tempMax = day.temp_max !== null ? Math.round(day.temp_max) : '--';
 
+                const solarEstimate = day.estimated_solar_kwh ? `<div class="solar-estimate">☀️ ~${day.estimated_solar_kwh} kWh</div>` : '';
                 forecastHtml += `
                     <div class="${classes.join(' ')}">
                         <div class="day-name">${dayName}</div>
@@ -1047,6 +1246,7 @@
                         <div class="temp">${tempMin}° / ${tempMax}°</div>
                         <div class="clouds">☁️ ${day.clouds}%</div>
                         ${day.pop > 0 ? `<div class="pop">💧 ${day.pop}%</div>` : ''}
+                        ${solarEstimate}
                     </div>
                 `;
             });
@@ -1084,12 +1284,65 @@
                 document.getElementById('weatherEnabled').checked = config.enabled;
                 document.getElementById('weatherLat').value = config.latitude || '';
                 document.getElementById('weatherLon').value = config.longitude || '';
+                document.getElementById('weatherCityName').value = config.city_name || '';
+                document.getElementById('weatherCity').value = config.city_name || '';
                 document.getElementById('weatherThreshold').value = config.bad_weather_threshold_days || 2;
                 document.getElementById('weatherCloudCover').value = config.min_cloud_cover_percent || 70;
+                document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || 0;
+                document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || 0;
             } catch (error) {
                 console.error('Error loading weather config:', error);
             }
         }
+
+
+        // City search autocomplete
+        let citySearchTimeout;
+        document.getElementById('weatherCity').addEventListener('input', async (e) => {
+            clearTimeout(citySearchTimeout);
+            const query = e.target.value.trim();
+            const dropdown = document.getElementById('cityDropdown');
+            
+            if (query.length < 2) {
+                dropdown.classList.remove('show');
+                return;
+            }
+
+            citySearchTimeout = setTimeout(async () => {
+                try {
+                    const response = await fetch('/api/weather/cities?q=' + encodeURIComponent(query));
+                    const data = await response.json();
+                    
+                    if (data.success && data.cities.length > 0) {
+                        dropdown.innerHTML = data.cities.map(city => 
+                            '<div class="city-option" data-lat="' + city.lat + '" data-lon="' + city.lon + '" data-name="' + city.display_name + '">' + city.display_name + '</div>'
+                        ).join('');
+                        dropdown.classList.add('show');
+                    } else {
+                        dropdown.classList.remove('show');
+                    }
+                } catch (error) {
+                    console.error('City search error:', error);
+                    dropdown.classList.remove('show');
+                }
+            }, 300);
+        });
+
+        document.getElementById('cityDropdown').addEventListener('click', (e) => {
+            if (e.target.classList.contains('city-option')) {
+                document.getElementById('weatherLat').value = e.target.dataset.lat;
+                document.getElementById('weatherLon').value = e.target.dataset.lon;
+                document.getElementById('weatherCityName').value = e.target.dataset.name;
+                document.getElementById('weatherCity').value = e.target.dataset.name;
+                document.getElementById('cityDropdown').classList.remove('show');
+            }
+        });
+
+        document.addEventListener('click', (e) => {
+            if (!e.target.closest('.setting-item')) {
+                document.getElementById('cityDropdown').classList.remove('show');
+            }
+        });
 
         function toggleWeatherSettings() {
             const settings = document.getElementById('weatherSettings');
@@ -1104,10 +1357,13 @@
 
             const payload = {
                 enabled: document.getElementById('weatherEnabled').checked,
+                city_name: document.getElementById('weatherCityName').value || '',
                 latitude: parseFloat(document.getElementById('weatherLat').value) || null,
                 longitude: parseFloat(document.getElementById('weatherLon').value) || null,
                 bad_weather_threshold_days: parseInt(document.getElementById('weatherThreshold').value) || 2,
-                min_cloud_cover_percent: parseInt(document.getElementById('weatherCloudCover').value) || 70
+                min_cloud_cover_percent: parseInt(document.getElementById('weatherCloudCover').value) || 70,
+                inverter_capacity_kw: parseFloat(document.getElementById('weatherInverterCapacity').value) || 0,
+                panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0
             };
 
             const apiKey = document.getElementById('weatherApiKey').value;

@@ -691,3 +691,289 @@ class TestWeatherClientAPIDown:
 
         mock_get.assert_not_called()
         assert result == cached_forecast
+
+
+class TestWeatherClientCitySearch:
+    """Tests for city search functionality"""
+
+    @patch('weather_client.requests.get')
+    def test_search_cities_success(self, mock_get):
+        """Test successful city search"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = [
+            {
+                "name": "Sydney",
+                "country": "AU",
+                "state": "New South Wales",
+                "lat": -33.8688,
+                "lon": 151.2093
+            },
+            {
+                "name": "Sydney",
+                "country": "CA",
+                "state": "Nova Scotia",
+                "lat": 46.1368,
+                "lon": -60.1942
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        result = WeatherClient.search_cities("test_key", "Sydney")
+
+        assert len(result) == 2
+        assert result[0]["name"] == "Sydney"
+        assert result[0]["country"] == "AU"
+        assert result[0]["display_name"] == "Sydney, New South Wales, AU"
+        assert result[1]["display_name"] == "Sydney, Nova Scotia, CA"
+
+    @patch('weather_client.requests.get')
+    def test_search_cities_no_state(self, mock_get):
+        """Test city search when state is not present"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = [
+            {
+                "name": "London",
+                "country": "GB",
+                "lat": 51.5074,
+                "lon": -0.1278
+            }
+        ]
+        mock_get.return_value = mock_response
+
+        result = WeatherClient.search_cities("test_key", "London")
+
+        assert len(result) == 1
+        assert result[0]["display_name"] == "London, GB"
+
+    def test_search_cities_short_query(self):
+        """Test city search with query less than 2 characters"""
+        result = WeatherClient.search_cities("test_key", "A")
+        assert result == []
+
+    def test_search_cities_empty_query(self):
+        """Test city search with empty query"""
+        result = WeatherClient.search_cities("test_key", "")
+        assert result == []
+
+    @patch('weather_client.requests.get')
+    def test_search_cities_api_error(self, mock_get):
+        """Test city search when API fails"""
+        mock_get.side_effect = Exception("API error")
+
+        result = WeatherClient.search_cities("test_key", "Sydney")
+
+        assert result == []
+
+    @patch('weather_client.requests.get')
+    def test_search_cities_empty_results(self, mock_get):
+        """Test city search with no results"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.raise_for_status = Mock()
+        mock_response.json.return_value = []
+        mock_get.return_value = mock_response
+
+        result = WeatherClient.search_cities("test_key", "NonexistentCity12345")
+
+        assert result == []
+
+
+class TestWeatherClientSolarEstimates:
+    """Tests for solar output estimation"""
+
+    def test_estimate_solar_output_clear_day(self):
+        """Test solar estimate for clear day"""
+        result = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=5.0,
+            clouds=10,
+            condition="Clear",
+            pop=5
+        )
+
+        # Clear day should have high output
+        assert result > 10  # Should be around 17-18 kWh for 5kW system
+
+    def test_estimate_solar_output_cloudy_day(self):
+        """Test solar estimate for cloudy day"""
+        result = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=5.0,
+            clouds=80,
+            condition="Clouds",
+            pop=20
+        )
+
+        # Cloudy day should have reduced output
+        assert result < 10
+
+    def test_estimate_solar_output_rainy_day(self):
+        """Test solar estimate for rainy day"""
+        result = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=5.0,
+            clouds=90,
+            condition="Rain",
+            pop=80
+        )
+
+        # Rainy day should have significantly reduced output
+        assert result < 5
+
+    def test_estimate_solar_output_scales_with_capacity(self):
+        """Test that solar estimate scales with panel capacity"""
+        result_5kw = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=5.0,
+            clouds=20,
+            condition="Clear",
+            pop=10
+        )
+        result_10kw = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=10.0,
+            clouds=20,
+            condition="Clear",
+            pop=10
+        )
+
+        # 10kW system should produce ~2x of 5kW system
+        assert abs(result_10kw - result_5kw * 2) < 1
+
+    def test_estimate_solar_output_zero_capacity(self):
+        """Test solar estimate with zero capacity"""
+        result = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=0,
+            clouds=10,
+            condition="Clear",
+            pop=5
+        )
+
+        assert result == 0
+
+    def test_estimate_solar_output_unknown_condition(self):
+        """Test solar estimate with unknown weather condition"""
+        result = WeatherClient.estimate_solar_output(
+            panel_capacity_kw=5.0,
+            clouds=30,
+            condition="UnknownWeather",
+            pop=10
+        )
+
+        # Should use default factor of 0.6
+        assert result > 0
+
+
+class TestWeatherClientCityName:
+    """Tests for city_name parameter functionality"""
+
+    def test_init_with_city_name(self):
+        """Test WeatherClient initialization with city_name"""
+        client = WeatherClient(
+            api_key="test_key",
+            latitude=-33.8688,
+            longitude=151.2093,
+            city_name="Sydney, New South Wales, AU"
+        )
+
+        assert client.city_name == "Sydney, New South Wales, AU"
+
+    def test_init_without_city_name(self):
+        """Test WeatherClient initialization without city_name"""
+        client = WeatherClient(
+            api_key="test_key",
+            latitude=-33.8688,
+            longitude=151.2093
+        )
+
+        assert client.city_name is None
+
+    def test_parse_onecall_uses_city_name(self):
+        """Test that _parse_onecall_forecast uses city_name for location"""
+        client = WeatherClient(
+            api_key="test_key",
+            latitude=-33.8688,
+            longitude=151.2093,
+            city_name="Sydney, AU"
+        )
+
+        data = {
+            "timezone": "Australia/Sydney",
+            "current": {"temp": 25, "weather": [{"main": "Clear"}], "clouds": 10},
+            "daily": []
+        }
+
+        result = client._parse_onecall_forecast(data)
+
+        assert result["location"] == "Sydney, AU"
+
+    def test_parse_legacy_uses_city_name(self):
+        """Test that _parse_legacy_forecast uses city_name for location"""
+        client = WeatherClient(
+            api_key="test_key",
+            latitude=-33.8688,
+            longitude=151.2093,
+            city_name="Sydney, AU"
+        )
+
+        data = {
+            "city": {"name": "Sydney"},
+            "list": []
+        }
+
+        result = client._parse_legacy_forecast(data)
+
+        assert result["location"] == "Sydney, AU"
+
+
+class TestWeatherAnalyserWithSolarEstimates:
+    """Tests for WeatherAnalyser with solar estimate integration"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.analyser = WeatherAnalyser(
+            bad_conditions=["Rain", "Thunderstorm"],
+            min_cloud_cover=70
+        )
+
+    def test_analyse_forecast_with_panel_capacity(self):
+        """Test that analyse_forecast adds solar estimates when panel_capacity provided"""
+        forecast = {
+            "success": True,
+            "daily": [
+                {"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5},
+                {"date": "2023-12-23", "condition": "Rain", "clouds": 90, "pop": 80}
+            ]
+        }
+
+        result = self.analyser.analyse_forecast(forecast, panel_capacity_kw=5.0)
+
+        assert "estimated_solar_kwh" in result["daily"][0]
+        assert "estimated_solar_kwh" in result["daily"][1]
+        # Clear day should have higher estimate than rainy day
+        assert result["daily"][0]["estimated_solar_kwh"] > result["daily"][1]["estimated_solar_kwh"]
+
+    def test_analyse_forecast_without_panel_capacity(self):
+        """Test that analyse_forecast does not add solar estimates when no capacity"""
+        forecast = {
+            "success": True,
+            "daily": [
+                {"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}
+            ]
+        }
+
+        result = self.analyser.analyse_forecast(forecast)
+
+        assert "estimated_solar_kwh" not in result["daily"][0]
+
+    def test_analyse_forecast_with_zero_capacity(self):
+        """Test that analyse_forecast does not add estimates for zero capacity"""
+        forecast = {
+            "success": True,
+            "daily": [
+                {"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}
+            ]
+        }
+
+        result = self.analyser.analyse_forecast(forecast, panel_capacity_kw=0)
+
+        assert "estimated_solar_kwh" not in result["daily"][0]

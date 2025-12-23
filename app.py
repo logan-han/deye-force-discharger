@@ -113,10 +113,13 @@ def init_weather_client():
         logger.warning("Weather location not configured - weather feature disabled")
         return
 
+    city_name = weather_config.get("city_name", "")
+
     weather_client = WeatherClient(
         api_key=api_key,
         latitude=latitude,
-        longitude=longitude
+        longitude=longitude,
+        city_name=city_name if city_name else None
     )
 
     bad_conditions = weather_config.get("bad_weather_conditions", ["Rain", "Thunderstorm", "Drizzle", "Snow"])
@@ -127,7 +130,8 @@ def init_weather_client():
         min_cloud_cover=min_cloud_cover
     )
 
-    logger.info(f"Weather client initialised for ({latitude}, {longitude})")
+    location_str = city_name if city_name else f"({latitude}, {longitude})"
+    logger.info(f"Weather client initialised for {location_str}")
 
 
 def get_weather_forecast():
@@ -145,7 +149,12 @@ def get_weather_forecast():
     if cache_age is None or cache_age > 1800:  # 30 minutes
         try:
             forecast = weather_client.get_forecast()
-            forecast = weather_analyser.analyse_forecast(forecast)
+            # Get panel capacity for solar estimates (use panel if set, else inverter)
+            weather_config = config.get("weather", {})
+            panel_kw = weather_config.get("panel_capacity_kw", 0)
+            inverter_kw = weather_config.get("inverter_capacity_kw", 0)
+            capacity_kw = panel_kw if panel_kw > 0 else inverter_kw
+            forecast = weather_analyser.analyse_forecast(forecast, panel_capacity_kw=capacity_kw if capacity_kw > 0 else None)
             weather_forecast_cache["forecast"] = forecast
             weather_forecast_cache["last_update"] = datetime.now()
             logger.info(f"Weather forecast updated: {forecast.get('consecutive_bad_days', 0)} consecutive bad days")
@@ -408,6 +417,144 @@ def stop_scheduler():
 
 # --- Flask Routes ---
 
+
+@app.route('/api/setup/status')
+def get_setup_status():
+    """Check if initial setup is needed"""
+    deye_config = config.get("deye", {})
+    
+    # Check if Deye credentials are configured
+    needs_setup = (
+        not deye_config.get("app_id") or 
+        deye_config.get("app_id") == "YOUR_APP_ID" or
+        not deye_config.get("app_secret") or
+        deye_config.get("app_secret") == "YOUR_APP_SECRET" or
+        not deye_config.get("email") or
+        deye_config.get("email") == "YOUR_EMAIL" or
+        not deye_config.get("device_sn") or
+        deye_config.get("device_sn") == "YOUR_DEVICE_SN"
+    )
+    
+    return jsonify({
+        "needs_setup": needs_setup,
+        "deye_configured": not needs_setup
+    })
+
+
+@app.route('/api/setup/test-deye', methods=['POST'])
+def test_deye_connection():
+    """Test Deye API connection with provided credentials"""
+    try:
+        body = request.get_json()
+        
+        test_client = DeyeCloudClient(
+            api_base_url=body.get("api_base_url", "https://eu1-developer.deyecloud.com"),
+            app_id=body.get("app_id"),
+            app_secret=body.get("app_secret"),
+            email=body.get("email"),
+            password=body.get("password")
+        )
+        
+        # Try to get device info to validate connection
+        device_sn = body.get("device_sn")
+        if device_sn:
+            device_info = test_client.get_device_info(device_sn)
+            if device_info:
+                return jsonify({
+                    "success": True,
+                    "message": "Connection successful! Device found.",
+                    "device_name": device_info.get("deviceName", "Unknown")
+                })
+            else:
+                return jsonify({
+                    "success": False,
+                    "error": "Device not found. Please check the serial number."
+                })
+        else:
+            # Just test authentication
+            return jsonify({
+                "success": True,
+                "message": "Authentication successful!"
+            })
+            
+    except Exception as e:
+        error_msg = str(e)
+        if "401" in error_msg or "unauthorized" in error_msg.lower():
+            error_msg = "Authentication failed. Please check your credentials."
+        elif "404" in error_msg:
+            error_msg = "API endpoint not found. Please check the API base URL."
+        return jsonify({"success": False, "error": error_msg})
+
+
+@app.route('/api/setup/test-weather', methods=['POST'])
+def test_weather_connection():
+    """Test OpenWeatherMap API connection"""
+    try:
+        body = request.get_json()
+        api_key = body.get("api_key")
+        
+        if not api_key:
+            return jsonify({"success": False, "error": "API key is required"})
+        
+        # Try a simple city search to test the API key
+        cities = WeatherClient.search_cities(api_key, "London", limit=1)
+        
+        if cities:
+            return jsonify({
+                "success": True,
+                "message": "API key is valid!"
+            })
+        else:
+            return jsonify({
+                "success": False,
+                "error": "API key test failed. Please check your key."
+            })
+            
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
+@app.route('/api/setup/complete', methods=['POST'])
+def complete_setup():
+    """Save initial setup configuration"""
+    global client, weather_client, weather_analyser
+    
+    try:
+        body = request.get_json()
+        
+        # Update Deye config
+        if "deye" in body:
+            deye_data = body["deye"]
+            if "deye" not in config:
+                config["deye"] = {}
+            
+            for key in ["api_base_url", "app_id", "app_secret", "email", "password", "device_sn"]:
+                if key in deye_data:
+                    config["deye"][key] = deye_data[key]
+        
+        # Update Weather config
+        if "weather" in body:
+            weather_data = body["weather"]
+            if "weather" not in config:
+                config["weather"] = {}
+            
+            for key in ["enabled", "api_key", "city_name", "latitude", "longitude", 
+                       "inverter_capacity_kw", "panel_capacity_kw"]:
+                if key in weather_data:
+                    config["weather"][key] = weather_data[key]
+        
+        save_config()
+        
+        # Reinitialize clients
+        init_deye_client()
+        init_weather_client()
+        
+        return jsonify({"success": True, "message": "Setup completed successfully!"})
+        
+    except Exception as e:
+        return jsonify({"success": False, "error": str(e)})
+
+
 @app.route('/')
 def index():
     """Serve the main web interface"""
@@ -642,13 +789,35 @@ def get_weather_config():
     weather_config = config.get("weather", {})
     return jsonify({
         "enabled": weather_config.get("enabled", False),
+        "city_name": weather_config.get("city_name", ""),
         "latitude": weather_config.get("latitude"),
         "longitude": weather_config.get("longitude"),
         "bad_weather_threshold_days": weather_config.get("bad_weather_threshold_days", 2),
         "bad_weather_conditions": weather_config.get("bad_weather_conditions", []),
         "min_cloud_cover_percent": weather_config.get("min_cloud_cover_percent", 70),
+        "inverter_capacity_kw": weather_config.get("inverter_capacity_kw", 0),
+        "panel_capacity_kw": weather_config.get("panel_capacity_kw", 0),
         "api_key_configured": bool(weather_config.get("api_key") and weather_config.get("api_key") != "YOUR_OPENWEATHERMAP_API_KEY")
     })
+
+
+
+
+@app.route('/api/weather/cities')
+def search_cities():
+    """Search for cities by name"""
+    query = request.args.get('q', '')
+    if len(query) < 2:
+        return jsonify({"success": True, "cities": []})
+
+    weather_config = config.get("weather", {})
+    api_key = weather_config.get("api_key", "")
+
+    if not api_key or api_key == "YOUR_OPENWEATHERMAP_API_KEY":
+        return jsonify({"success": False, "error": "API key not configured", "cities": []})
+
+    cities = WeatherClient.search_cities(api_key, query)
+    return jsonify({"success": True, "cities": cities})
 
 
 @app.route('/api/weather/config', methods=['POST'])
@@ -665,6 +834,8 @@ def update_weather_config():
         # Update allowed fields
         if "enabled" in body:
             config["weather"]["enabled"] = body["enabled"]
+        if "city_name" in body:
+            config["weather"]["city_name"] = body["city_name"]
         if "latitude" in body:
             config["weather"]["latitude"] = body["latitude"]
         if "longitude" in body:
@@ -675,6 +846,10 @@ def update_weather_config():
             config["weather"]["bad_weather_conditions"] = body["bad_weather_conditions"]
         if "min_cloud_cover_percent" in body:
             config["weather"]["min_cloud_cover_percent"] = body["min_cloud_cover_percent"]
+        if "inverter_capacity_kw" in body:
+            config["weather"]["inverter_capacity_kw"] = body["inverter_capacity_kw"]
+        if "panel_capacity_kw" in body:
+            config["weather"]["panel_capacity_kw"] = body["panel_capacity_kw"]
         if "api_key" in body and body["api_key"]:
             config["weather"]["api_key"] = body["api_key"]
 

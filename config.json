@@ -20,8 +20,16 @@
     "latitude": -33.8688,
     "longitude": 151.2093,
     "bad_weather_threshold_days": 2,
-    "bad_weather_conditions": ["Rain", "Thunderstorm", "Drizzle", "Snow"],
-    "min_cloud_cover_percent": 70
+    "bad_weather_conditions": [
+      "Rain",
+      "Thunderstorm",
+      "Drizzle",
+      "Snow"
+    ],
+    "min_cloud_cover_percent": 70,
+    "city_name": "",
+    "inverter_capacity_kw": 0,
+    "panel_capacity_kw": 0
   },
   "free_energy": {
     "enabled": false,

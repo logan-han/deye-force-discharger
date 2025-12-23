@@ -33,13 +33,23 @@ The scheduler monitors the current time, battery SoC, and weather forecast, cont
 
 The system can automatically skip battery discharge when bad weather is forecasted. This helps preserve battery charge for cloudy/rainy days when solar generation will be insufficient.
 
-**Why this matters:** During consecutive bad weather days, solar panels won't generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
+**Why this matters:** During consecutive bad weather days, solar panels will not generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
 
 **How it works:**
 - Fetches 7-day weather forecast from OpenWeatherMap
-- Analyzes conditions: rain, thunderstorms, drizzle, snow, high cloud cover (>70%)
+- Analyses conditions: rain, thunderstorms, drizzle, snow, high cloud cover (>70%)
 - If bad weather is expected for X consecutive days (configurable, default 2), discharge is skipped
 - Displayed in the web UI with forecast cards showing good/bad days
+
+## Solar Output Estimates
+
+When you configure your solar system capacity, the application displays estimated daily solar output for each forecast day. This helps you plan your energy usage and understand when discharge might be beneficial.
+
+**How it works:**
+- Enter your inverter capacity (or panel capacity if known)
+- The system calculates expected output based on weather conditions
+- Estimates account for cloud cover, precipitation probability, and weather type
+- Displayed alongside the weather forecast cards
 
 ## Requirements
 
@@ -47,9 +57,30 @@ The system can automatically skip battery discharge when bad weather is forecast
 - Deye Cloud developer account (API credentials)
 - Deye hybrid inverter with battery storage
 
+## Installation & Setup
+
+### Quick Start
+
+```bash
+# Start the container
+docker-compose up -d
+```
+
+The web interface is available at `http://<server_ip>:7777`
+
+### First-Time Setup
+
+When you first access the web interface with default configuration, a **setup wizard** will guide you through:
+
+1. **Deye Cloud Configuration** - Enter your API credentials and device serial number
+2. **Weather Integration** (optional) - Add OpenWeatherMap API key for weather-based features
+3. **Solar System Details** - Configure your inverter/panel capacity for energy estimates
+
+Each step includes a **Test Connection** button to verify your settings before proceeding.
+
 ## Configuration
 
-Edit `config.json` with your credentials and preferences:
+You can also manually edit `config.json`:
 
 ```json
 {
@@ -71,11 +102,20 @@ Edit `config.json` with your credentials and preferences:
   "weather": {
     "enabled": true,
     "api_key": "YOUR_OPENWEATHERMAP_API_KEY",
+    "city_name": "Sydney, New South Wales, AU",
     "latitude": -33.8688,
     "longitude": 151.2093,
     "bad_weather_threshold_days": 2,
     "bad_weather_conditions": ["Rain", "Thunderstorm", "Drizzle", "Snow"],
-    "min_cloud_cover_percent": 70
+    "min_cloud_cover_percent": 70,
+    "inverter_capacity_kw": 5,
+    "panel_capacity_kw": 0
+  },
+  "free_energy": {
+    "enabled": false,
+    "start_time": "11:00",
+    "end_time": "14:00",
+    "target_soc": 100
   }
 }
 ```
@@ -102,25 +142,23 @@ Edit `config.json` with your credentials and preferences:
 |-------|-------------|
 | `enabled` | Enable/disable weather-based discharge skip (default: false) |
 | `api_key` | OpenWeatherMap API key ([get free key](https://openweathermap.org/api)) |
+| `city_name` | City name (selected via autocomplete in UI) |
 | `latitude` | Your location latitude |
 | `longitude` | Your location longitude |
 | `bad_weather_threshold_days` | Number of consecutive bad days to trigger skip (default: 2) |
 | `bad_weather_conditions` | Weather conditions considered "bad" for solar |
 | `min_cloud_cover_percent` | Cloud cover % threshold for bad weather (default: 70) |
+| `inverter_capacity_kw` | Your inverter capacity in kW (for solar estimates) |
+| `panel_capacity_kw` | Your panel capacity in kW (optional, overrides inverter capacity) |
 
-## Installation
+### Free Energy Window (Optional)
 
-```bash
-# Edit configuration
-vi config.json
-
-# Start the container
-docker-compose up -d
-```
-
-## Usage
-
-The web interface is available at `http://<server_ip>:7777`
+| Field | Description |
+|-------|-------------|
+| `enabled` | Enable/disable free energy window charging |
+| `start_time` | Start time for free energy period (HH:MM) |
+| `end_time` | End time for free energy period (HH:MM) |
+| `target_soc` | Target SoC to charge to during free energy window |
 
 ## Getting Deye Cloud API Credentials
 
@@ -128,10 +166,10 @@ The web interface is available at `http://<server_ip>:7777`
 2. Create an application to get your `app_id` and `app_secret`
 3. Find your device serial number in the Deye app or on the inverter
 
-## Android Widget 
+## Android Widget
 
-I've also created an Android app for this and some extra features like show SoC & charge/discharge status in 1x1 widget. 
+I have also created an Android app for this and some extra features like showing SoC & charge/discharge status in a 1x1 widget.
 
-Worth consider if you don't have a place to host this. 
+Worth considering if you do not have a place to host this.
 
 Drop me an email if you want to be a tester. (logan_at_han.life)

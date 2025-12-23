@@ -23,14 +23,60 @@ class WeatherAPIError(Exception):
 class WeatherClient:
     """Client for OpenWeatherMap API to fetch weather forecasts"""
 
-    def __init__(self, api_key: str, latitude: float, longitude: float):
+    def __init__(self, api_key: str, latitude: float = None, longitude: float = None, city_name: str = None):
         self.api_key = api_key
         self.latitude = latitude
         self.longitude = longitude
+        self.city_name = city_name
         self.base_url = "https://api.openweathermap.org/data/2.5"
         self._cache = {}
         self._cache_time = None
         self._cache_duration = 1800  # 30 minutes cache
+
+    @staticmethod
+    def search_cities(api_key: str, query: str, limit: int = 5):
+        """Search for cities by name using OpenWeatherMap Geocoding API."""
+        if not query or len(query) < 2:
+            return []
+        import requests
+        url = "http://api.openweathermap.org/geo/1.0/direct"
+        params = {"q": query, "limit": limit, "appid": api_key}
+        try:
+            response = requests.get(url, params=params, timeout=10)
+            response.raise_for_status()
+            results = response.json()
+            cities = []
+            for item in results:
+                city = {
+                    "name": item.get("name", ""),
+                    "country": item.get("country", ""),
+                    "state": item.get("state", ""),
+                    "lat": item.get("lat"),
+                    "lon": item.get("lon")
+                }
+                display_parts = [city["name"]]
+                if city["state"]:
+                    display_parts.append(city["state"])
+                display_parts.append(city["country"])
+                city["display_name"] = ", ".join(display_parts)
+                cities.append(city)
+            return cities
+        except Exception:
+            return []
+
+    @staticmethod
+    def estimate_solar_output(panel_capacity_kw: float, clouds: int, condition: str, pop: int) -> float:
+        """Estimate daily solar output based on weather conditions."""
+        base_daily_kwh = panel_capacity_kw * 4.5 * 0.8
+        cloud_factor = 1.0 - (clouds / 100 * 0.7)
+        condition_factors = {
+            "Clear": 1.0, "Clouds": 0.7, "Rain": 0.3, "Drizzle": 0.4,
+            "Thunderstorm": 0.2, "Snow": 0.25, "Mist": 0.6, "Fog": 0.5, "Haze": 0.7
+        }
+        condition_factor = condition_factors.get(condition, 0.6)
+        pop_factor = 1.0 - (pop / 100 * 0.3)
+        weather_factor = min(cloud_factor, condition_factor) * pop_factor
+        return round(base_daily_kwh * weather_factor, 1)
 
     def _is_cache_valid(self) -> bool:
         """Check if cached data is still valid"""
@@ -166,7 +212,8 @@ class WeatherClient:
                 "exclude": "minutely,hourly,alerts"
             }
 
-            logger.info(f"Fetching weather forecast for ({self.latitude}, {self.longitude})")
+            location_str = self.city_name if self.city_name else f"({self.latitude}, {self.longitude})"
+            logger.info(f"Fetching weather forecast for {location_str}")
             response = self._make_request_with_retry(url, params)
 
             # If One Call 3.0 fails (requires subscription), fallback to 2.5
@@ -282,9 +329,10 @@ class WeatherClient:
 
         current_weather_list = current.get("weather", [])
         current_weather = current_weather_list[0] if current_weather_list else {}
+        location = self.city_name if self.city_name else data.get("timezone", "Unknown")
         return {
             "success": True,
-            "location": data.get("timezone", "Unknown"),
+            "location": location,
             "current": {
                 "temp": current.get("temp"),
                 "condition": current_weather.get("main", "Unknown"),
@@ -355,9 +403,10 @@ class WeatherClient:
             })
 
         city = data.get("city", {})
+        location = self.city_name if self.city_name else city.get("name", "Unknown")
         return {
             "success": True,
-            "location": city.get("name", "Unknown"),
+            "location": location,
             "current": daily_forecasts[0] if daily_forecasts else {},
             "daily": daily_forecasts
         }
@@ -374,7 +423,7 @@ class WeatherAnalyser:
         self.bad_conditions = bad_conditions if bad_conditions is not None else ["Rain", "Thunderstorm", "Drizzle", "Snow"]
         self.min_cloud_cover = min_cloud_cover
 
-    def analyse_forecast(self, forecast: Dict[str, Any]) -> Dict[str, Any]:
+    def analyse_forecast(self, forecast: Dict[str, Any], panel_capacity_kw: float = None) -> Dict[str, Any]:
         """
         Analyse forecast and mark bad weather days
 
@@ -391,6 +440,15 @@ class WeatherAnalyser:
             day["is_bad_weather"] = is_bad
             if is_bad:
                 bad_weather_days.append(day["date"])
+            
+            # Add solar output estimate if panel capacity provided
+            if panel_capacity_kw and panel_capacity_kw > 0:
+                day["estimated_solar_kwh"] = WeatherClient.estimate_solar_output(
+                    panel_capacity_kw,
+                    day.get("clouds", 0),
+                    day.get("condition", "Unknown"),
+                    day.get("pop", 0)
+                )
 
         forecast["bad_weather_days"] = bad_weather_days
         forecast["consecutive_bad_days"] = self._count_consecutive_bad_days(daily)
