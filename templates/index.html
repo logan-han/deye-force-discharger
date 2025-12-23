@@ -431,26 +431,6 @@
             color: #aaa;
             font-size: 0.7rem;
         }
-        .weather-legend {
-            display: flex;
-            justify-content: center;
-            gap: 15px;
-            margin-top: 8px;
-            font-size: 0.65rem;
-            color: #888;
-        }
-        .weather-legend span {
-            display: flex;
-            align-items: center;
-            gap: 4px;
-        }
-        .weather-legend .dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 2px;
-        }
-        .weather-legend .dot.good { background: #4ecca3; }
-        .weather-legend .dot.bad { background: #e94560; }
         .weather-disabled {
             text-align: center;
             padding: 20px;
@@ -1521,15 +1501,7 @@
             });
             forecastHtml += '</div>';
 
-            // Legend
-            const legendHtml = `
-                <div class="weather-legend">
-                    <span><div class="dot good"></div> Good for solar</span>
-                    <span><div class="dot bad"></div> Bad weather (skip discharge)</span>
-                </div>
-            `;
-
-            container.innerHTML = bannerHtml + forecastHtml + legendHtml;
+            container.innerHTML = bannerHtml + forecastHtml;
         }
 
         async function refreshWeather() {
