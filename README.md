@@ -1,5 +1,8 @@
 # Deye Force Discharger
 
+[![Docker Hub](https://img.shields.io/docker/v/loganhan123/deye-force-discharger?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/loganhan123/deye-force-discharger)
+[![Docker Pulls](https://img.shields.io/docker/pulls/loganhan123/deye-force-discharger)](https://hub.docker.com/r/loganhan123/deye-force-discharger)
+
 A Python application to automate battery discharge scheduling for Deye hybrid inverters via the Deye Cloud API.
 
 ![Web Interface](screenshot.png)
@@ -59,7 +62,20 @@ When you configure your solar system capacity, the application displays estimate
 
 ## Installation & Setup
 
-### Quick Start
+### Quick Start with Docker Hub
+
+```bash
+# Pull and run the container
+docker run -d \
+  --name deye-force-discharger \
+  -p 7777:7777 \
+  -v $(pwd)/config.json:/app/config.json \
+  -e TZ=Australia/Sydney \
+  --restart unless-stopped \
+  loganhan123/deye-force-discharger:latest
+```
+
+### Using Docker Compose
 
 ```bash
 # Start the container

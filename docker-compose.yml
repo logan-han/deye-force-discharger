@@ -2,8 +2,9 @@ version: '3.8'
 
 services:
   deye-force-discharger:
-    build: .
-    image: deye-force-discharger:latest
+    image: loganhan123/deye-force-discharger:latest
+    # Uncomment below to build locally instead
+    # build: .
     container_name: deye-force-discharger
     restart: unless-stopped
     ports:
