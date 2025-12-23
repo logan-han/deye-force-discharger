@@ -47,6 +47,7 @@ class TestDeyeCloudClient:
     def test_get_token_success(self, mock_post):
         """Test successful token acquisition"""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "code": "0",
@@ -81,6 +82,7 @@ class TestDeyeCloudClient:
         self.client.token_expires_at = time.time() - 100  # Already expired
 
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "code": "0",
@@ -100,6 +102,7 @@ class TestDeyeCloudClient:
     def test_get_token_failure(self, mock_post):
         """Test token acquisition failure"""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "code": "500",
@@ -116,6 +119,7 @@ class TestDeyeCloudClient:
     def test_get_token_no_token_in_response(self, mock_post):
         """Test handling when no token in response"""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "code": "0",
@@ -132,6 +136,7 @@ class TestDeyeCloudClient:
     def test_get_token_alternative_response_structure(self, mock_post):
         """Test token extraction from alternative response structure"""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "success": True,
@@ -150,6 +155,7 @@ class TestDeyeCloudClient:
         """Test GET request"""
         mock_token.return_value = "test_token"
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {"success": True}
         mock_get.return_value = mock_response
@@ -165,6 +171,7 @@ class TestDeyeCloudClient:
         """Test POST request"""
         mock_token.return_value = "test_token"
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {"success": True}
         mock_post.return_value = mock_response
@@ -191,7 +198,7 @@ class TestDeyeCloudClient:
 
         result = self.client.get_device_info()
 
-        mock_request.assert_called_with("POST", "/v1.0/device", {"deviceSn": "TEST123456"})
+        mock_request.assert_called_with("POST", "/v1.0/device/info", {"deviceSn": "TEST123456"})
 
     @patch.object(DeyeCloudClient, '_make_request')
     def test_get_device_latest_data(self, mock_request):
@@ -382,6 +389,7 @@ class TestDeyeCloudClientEdgeCases:
     def test_token_with_access_token_key(self, mock_post):
         """Test token extraction with access_token key (underscore)"""
         mock_response = Mock()
+        mock_response.status_code = 200
         mock_response.raise_for_status = Mock()
         mock_response.json.return_value = {
             "code": "0",

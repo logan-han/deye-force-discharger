@@ -316,7 +316,7 @@ class TestGetWeatherForecast:
             app_module.weather_analyser = Mock()
             app_module.weather_forecast_cache = {
                 "forecast": {"cached": True},
-                "last_update": datetime(2023, 12, 22, 11, 45, 0)  # 15 minutes ago
+                "last_update": datetime(2023, 12, 22, 11, 58, 0)  # 2 minutes ago, within 5 min cache
             }
 
             result = app_module.get_weather_forecast()
