@@ -84,7 +84,6 @@ def sample_forecast_good():
                 "is_bad_weather": False
             }
         ],
-        "consecutive_bad_days": 0,
         "bad_weather_days": []
     }
 
@@ -142,6 +141,5 @@ def sample_forecast_bad():
                 "is_bad_weather": True
             }
         ],
-        "consecutive_bad_days": 3,
         "bad_weather_days": ["2023-12-22", "2023-12-23", "2023-12-24"]
     }

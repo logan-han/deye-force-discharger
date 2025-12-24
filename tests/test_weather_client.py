@@ -279,34 +279,6 @@ class TestWeatherAnalyser:
         day = {"condition": "Clouds", "clouds": 40, "pop": 10}
         assert self.analyser._is_bad_weather_day(day) is False
 
-    def test_count_consecutive_bad_days_none(self):
-        """Test consecutive bad days count with no bad days"""
-        daily = [
-            {"is_bad_weather": False},
-            {"is_bad_weather": False},
-            {"is_bad_weather": False}
-        ]
-        assert self.analyser._count_consecutive_bad_days(daily) == 0
-
-    def test_count_consecutive_bad_days_all(self):
-        """Test consecutive bad days count with all bad days"""
-        daily = [
-            {"is_bad_weather": True},
-            {"is_bad_weather": True},
-            {"is_bad_weather": True}
-        ]
-        assert self.analyser._count_consecutive_bad_days(daily) == 3
-
-    def test_count_consecutive_bad_days_mixed(self):
-        """Test consecutive bad days count with mixed days"""
-        daily = [
-            {"is_bad_weather": True},
-            {"is_bad_weather": True},
-            {"is_bad_weather": False},
-            {"is_bad_weather": True}
-        ]
-        assert self.analyser._count_consecutive_bad_days(daily) == 2
-
     def test_should_skip_discharge_low_solar(self):
         """Test skip discharge when solar forecast is below threshold"""
         forecast = {

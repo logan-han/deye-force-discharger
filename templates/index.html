@@ -813,6 +813,18 @@
                             <small style="color: #666; font-size: 0.8em;">Leave blank to auto-estimate (inverter × 1.25)</small>
                         </div>
                     </div>
+                    <div class="weather-settings-row">
+                        <div class="setting-item">
+                            <label>Panel Tilt (°)</label>
+                            <input type="number" id="weatherPanelTilt" min="0" max="90" step="1" value="" placeholder="Default: 25">
+                            <small style="color: #666; font-size: 0.8em;">Roof angle (0=flat, 90=vertical)</small>
+                        </div>
+                        <div class="setting-item">
+                            <label>Panel Azimuth (°)</label>
+                            <input type="number" id="weatherPanelAzimuth" min="-180" max="180" step="1" value="" placeholder="Auto from location">
+                            <small style="color: #666; font-size: 0.8em;">Direction: 0=North, 90=East, 180=South, -90=West</small>
+                        </div>
+                    </div>
                     <button type="submit" class="btn btn-primary btn-sm">Save Weather Settings</button>
                 </form>
             </div>
@@ -849,6 +861,10 @@
                             <div class="setting-item">
                                 <label>Discharge SoC %</label>
                                 <input type="number" id="cutoffSoc" min="5" max="100" value="50" title="During discharge window - stop when battery reaches this level">
+                            </div>
+                            <div class="setting-item">
+                                <label>Reactivation %</label>
+                                <input type="number" id="reactivationMargin" min="0" max="20" value="5" title="Buffer above cutoff to restart discharge - prevents cycling">
                             </div>
                         </div>
                         <button type="submit" class="btn btn-primary btn-sm">Save</button>
@@ -1327,6 +1343,7 @@
                     document.getElementById('endTime').value = schedule.force_discharge_end || '19:30';
                     document.getElementById('minSocReserve').value = schedule.min_soc_reserve || 20;
                     document.getElementById('cutoffSoc').value = schedule.force_discharge_cutoff_soc || 50;
+                    document.getElementById('reactivationMargin').value = schedule.reactivation_margin || 5;
                 }
 
                 // TOU table
@@ -1368,7 +1385,8 @@
                 force_discharge_start: document.getElementById('startTime').value,
                 force_discharge_end: document.getElementById('endTime').value,
                 min_soc_reserve: parseInt(document.getElementById('minSocReserve').value),
-                force_discharge_cutoff_soc: parseInt(document.getElementById('cutoffSoc').value)
+                force_discharge_cutoff_soc: parseInt(document.getElementById('cutoffSoc').value),
+                reactivation_margin: parseInt(document.getElementById('reactivationMargin').value) || 5
             };
 
             try {
@@ -1472,9 +1490,9 @@
                 `;
             }
 
-            // Forecast cards
+            // Forecast cards - limit to 4 days for better mobile display
             let forecastHtml = '<div class="weather-container">';
-            daily.forEach((day, index) => {
+            daily.slice(0, 4).forEach((day, index) => {
                 const classes = ['weather-day'];
                 // Only highlight future days for bad weather (not today) since discharge decision is based on future forecasts
                 if (!day.is_today && day.is_bad_weather) classes.push('bad-weather');
@@ -1530,6 +1548,8 @@
                 document.getElementById('weatherSolarThreshold').value = config.min_solar_threshold_kwh || 15;
                 document.getElementById('weatherInverterCapacity').value = config.inverter_capacity_kw || '';
                 document.getElementById('weatherPanelCapacity').value = config.panel_capacity_kw || '';
+                document.getElementById('weatherPanelTilt').value = config.panel_tilt || '';
+                document.getElementById('weatherPanelAzimuth').value = config.panel_azimuth !== null ? config.panel_azimuth : '';
             } catch (error) {
                 console.error('Error loading weather config:', error);
             }
@@ -1599,6 +1619,9 @@
             const lat = document.getElementById('weatherLatitude').value;
             const lon = document.getElementById('weatherLongitude').value;
 
+            const tiltVal = document.getElementById('weatherPanelTilt').value;
+            const azimuthVal = document.getElementById('weatherPanelAzimuth').value;
+
             const payload = {
                 enabled: document.getElementById('weatherEnabled').checked,
                 city_name: document.getElementById('weatherCityName').value || '',
@@ -1607,7 +1630,9 @@
                 timezone: document.getElementById('weatherTimezone').value || 'auto',
                 min_solar_threshold_kwh: parseFloat(document.getElementById('weatherSolarThreshold').value) || 15,
                 inverter_capacity_kw: parseFloat(document.getElementById('weatherInverterCapacity').value) || 0,
-                panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0
+                panel_capacity_kw: parseFloat(document.getElementById('weatherPanelCapacity').value) || 0,
+                panel_tilt: tiltVal ? parseInt(tiltVal) : null,
+                panel_azimuth: azimuthVal !== '' ? parseInt(azimuthVal) : null
             };
 
             try {

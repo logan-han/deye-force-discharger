@@ -167,9 +167,9 @@ def init_weather_client():
         if panel_kw and panel_kw > 0:
             kwp = panel_kw
         elif inverter_kw and inverter_kw > 0:
-            kwp = inverter_kw * 1.25  # Common panel oversizing ratio
+            kwp = int(inverter_kw * 1.25)  # Match Android app behavior
         elif api_inverter_kw and api_inverter_kw > 0:
-            kwp = api_inverter_kw * 1.25
+            kwp = int(api_inverter_kw * 1.25)
         else:
             kwp = 5.0  # Default fallback
 
@@ -365,6 +365,7 @@ def scheduler_loop():
             # Get SoC settings
             min_soc_reserve = schedule.get("min_soc_reserve", 20)
             cutoff_soc = schedule.get("force_discharge_cutoff_soc", 50)
+            reactivation_margin = schedule.get("reactivation_margin", 5)  # Hysteresis buffer
             max_power = current_state.get("inverter_capacity") or 10000
 
             # Get current battery info
@@ -393,10 +394,22 @@ def scheduler_loop():
             # Check if force discharge is enabled
             force_discharge_enabled = schedule.get("enabled", True)
 
-            # Determine if we should be in force discharge mode
-            # Force discharge when: enabled AND in window AND SoC above cutoff AND NOT weather skip
-            should_force_discharge = force_discharge_enabled and in_window and (soc is None or soc > cutoff_soc) and not weather_skip
-            logger.debug(f"Scheduler check: discharge={'active' if should_force_discharge else 'inactive'}")
+            # Determine if we should be in force discharge mode with hysteresis
+            # - If already discharging: keep going until SoC <= cutoff
+            # - If not discharging: only start if SoC > (cutoff + margin)
+            # This prevents rapid cycling when SoC hovers around the cutoff threshold
+            currently_discharging = current_state.get("force_discharge_active", False)
+
+            if currently_discharging:
+                # Keep discharging until we reach the cutoff
+                soc_allows_discharge = soc is None or soc > cutoff_soc
+            else:
+                # Only start discharging if SoC is above cutoff + margin
+                activation_threshold = cutoff_soc + reactivation_margin
+                soc_allows_discharge = soc is None or soc > activation_threshold
+
+            should_force_discharge = force_discharge_enabled and in_window and soc_allows_discharge and not weather_skip
+            logger.debug(f"Scheduler check: discharge={'active' if should_force_discharge else 'inactive'}, SoC={soc}, threshold={cutoff_soc if currently_discharging else cutoff_soc + reactivation_margin}")
 
             if weather_skip and in_window:
                 logger.debug("Skipping discharge due to weather conditions")
@@ -896,72 +909,80 @@ def get_soc():
 @app.route('/api/weather')
 def get_weather():
     """Get weather forecast"""
-    weather_config = config.get("weather", {})
+    try:
+        weather_config = config.get("weather", {})
 
-    if not weather_config.get("enabled", False):
+        if not weather_config.get("enabled", False):
+            return jsonify({
+                "success": True,
+                "enabled": False,
+                "message": "Weather feature is disabled"
+            })
+
+        if not weather_client:
+            return jsonify({
+                "success": False,
+                "enabled": True,
+                "error": "Weather client not initialised - check API key and location"
+            })
+
+        forecast = get_weather_forecast()
+        if not forecast or not forecast.get("success", False):
+            return jsonify({
+                "success": False,
+                "enabled": True,
+                "error": "Failed to fetch weather forecast"
+            })
+
+        skip_active, _ = should_skip_discharge_for_weather()
+
+        # Sanitize skip_reason to avoid exposing internal details
+        safe_skip_reason = "Weather conditions unfavorable" if skip_active else "Weather OK"
+
+        # Sanitize forecast to only include UI-safe fields
+        safe_forecast = {
+            "success": True,
+            "daily": []
+        }
+        for day in forecast.get("daily", []):
+            safe_day = {
+                "date": day.get("date"),
+                "day_name": day.get("day_name"),
+                "condition": day.get("condition"),
+                "icon": day.get("icon"),
+                "temp_max": day.get("temp_max"),
+                "temp_min": day.get("temp_min"),
+                "cloud_cover": day.get("cloud_cover"),
+                "precipitation_probability": day.get("precipitation_probability"),
+                "is_bad_weather": day.get("is_bad_weather", False),
+                "estimated_solar_kwh": day.get("estimated_solar_kwh"),
+                "solar_source": day.get("solar_source")
+            }
+            safe_forecast["daily"].append(safe_day)
+
         return jsonify({
             "success": True,
-            "enabled": False,
-            "message": "Weather feature is disabled"
+            "enabled": True,
+            "forecast": safe_forecast,
+            "skip_discharge": skip_active,
+            "skip_reason": safe_skip_reason,
+            "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
+            "last_update": weather_forecast_cache.get("last_update").isoformat() if weather_forecast_cache.get("last_update") else None
         })
-
-    if not weather_client:
+    except Exception as e:
+        logger.error(f"Error getting weather forecast: {e}")
         return jsonify({
             "success": False,
             "enabled": True,
-            "error": "Weather client not initialised - check API key and location"
-        })
-
-    forecast = get_weather_forecast()
-    if not forecast:
-        return jsonify({
-            "success": False,
-            "enabled": True,
-            "error": "Failed to fetch weather forecast"
-        })
-
-    skip_active, skip_reason = should_skip_discharge_for_weather()
-
-    # Sanitize skip_reason to avoid exposing internal details
-    safe_skip_reason = "Weather conditions unfavorable" if skip_active else "Weather OK"
-
-    # Sanitize forecast to only include UI-safe fields
-    safe_forecast = {
-        "success": True,
-        "daily": [],
-        "consecutive_bad_days": forecast.get("consecutive_bad_days", 0)
-    }
-    for day in forecast.get("daily", []):
-        safe_day = {
-            "date": day.get("date"),
-            "day_name": day.get("day_name"),
-            "condition": day.get("condition"),
-            "icon": day.get("icon"),
-            "temp_max": day.get("temp_max"),
-            "temp_min": day.get("temp_min"),
-            "cloud_cover": day.get("cloud_cover"),
-            "precipitation_probability": day.get("precipitation_probability"),
-            "is_bad_weather": day.get("is_bad_weather", False),
-            "estimated_solar_kwh": day.get("estimated_solar_kwh"),
-            "solar_source": day.get("solar_source")
-        }
-        safe_forecast["daily"].append(safe_day)
-
-    return jsonify({
-        "success": True,
-        "enabled": True,
-        "forecast": safe_forecast,
-        "skip_discharge": skip_active,
-        "skip_reason": safe_skip_reason,
-        "min_solar_threshold_kwh": weather_config.get("min_solar_threshold_kwh", 0),
-        "last_update": weather_forecast_cache.get("last_update").isoformat() if weather_forecast_cache.get("last_update") else None
-    })
+            "error": "Failed to get weather forecast. Check logs for details."
+        }), 500
 
 
 @app.route('/api/weather/config')
 def get_weather_config():
     """Get weather configuration"""
     weather_config = config.get("weather", {})
+    solar_config = weather_config.get("solar", {})
     return jsonify({
         "enabled": weather_config.get("enabled", False),
         "city_name": weather_config.get("city_name", ""),
@@ -973,6 +994,8 @@ def get_weather_config():
         "min_cloud_cover_percent": weather_config.get("min_cloud_cover_percent", 70),
         "inverter_capacity_kw": weather_config.get("inverter_capacity_kw", 0),
         "panel_capacity_kw": weather_config.get("panel_capacity_kw", 0),
+        "panel_tilt": solar_config.get("declination"),
+        "panel_azimuth": solar_config.get("azimuth"),
         "location_configured": weather_config.get("latitude") is not None and weather_config.get("longitude") is not None
     })
 
@@ -1022,6 +1045,14 @@ def update_weather_config():
             config["weather"]["inverter_capacity_kw"] = body["inverter_capacity_kw"]
         if "panel_capacity_kw" in body:
             config["weather"]["panel_capacity_kw"] = body["panel_capacity_kw"]
+
+        # Solar panel configuration (tilt/azimuth)
+        if "solar" not in config["weather"]:
+            config["weather"]["solar"] = {}
+        if "panel_tilt" in body:
+            config["weather"]["solar"]["declination"] = body["panel_tilt"]
+        if "panel_azimuth" in body:
+            config["weather"]["solar"]["azimuth"] = body["panel_azimuth"]
 
         save_config()
 

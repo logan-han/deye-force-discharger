@@ -176,7 +176,7 @@ class WeatherClient:
 
     def get_forecast(self) -> Dict[str, Any]:
         """
-        Get 7-day weather forecast with hourly data for solar predictions.
+        Get 4-day weather forecast with hourly data for solar predictions.
         Uses Open-Meteo free API (no API key required).
         """
         if self._is_cache_valid() and "forecast" in self._cache:
@@ -190,7 +190,7 @@ class WeatherClient:
                 "hourly": "temperature_2m,cloud_cover,precipitation_probability,precipitation,weather_code",
                 "daily": "temperature_2m_max,temperature_2m_min,weather_code,precipitation_sum,precipitation_probability_max",
                 "timezone": self.timezone_str,
-                "forecast_days": 7
+                "forecast_days": 4
             }
 
             logger.info("Fetching weather forecast from Open-Meteo")
@@ -270,7 +270,7 @@ class WeatherClient:
 
         today = datetime.now().strftime("%Y-%m-%d")
 
-        for i, date_str in enumerate(dates[:7]):
+        for i, date_str in enumerate(dates[:4]):
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             weather_code = weather_codes[i] if i < len(weather_codes) else 0
             condition = self._weather_code_to_condition(weather_code)
@@ -465,25 +465,23 @@ class SolarForecastClient:
     @staticmethod
     def _calculate_optimal_tilt(latitude: float) -> int:
         """
-        Calculate optimal panel tilt angle based on latitude.
-        Rule of thumb: tilt angle ~ latitude for year-round optimization.
+        Default panel tilt angle.
+        Most residential installs follow roof pitch (typically 15-25 degrees).
         """
-        # Use absolute latitude, clamped between 10-60 degrees
-        optimal = abs(latitude)
-        return int(max(10, min(60, optimal)))
+        return 25
 
     @staticmethod
     def _calculate_optimal_azimuth(latitude: float) -> int:
         """
         Calculate optimal panel azimuth (direction) based on hemisphere.
-        forecast.solar API convention: 0=south, 180/-180=north
-        Northern hemisphere: face south (azimuth = 0)
-        Southern hemisphere: face north (azimuth = 180)
+        Panels should face the equator for maximum sun exposure.
+        Southern hemisphere: 0 degrees (north-facing)
+        Northern hemisphere: 180 degrees (south-facing)
         """
-        if latitude >= 0:
-            return 0  # Face south in northern hemisphere
+        if latitude < 0:
+            return 0  # Face north in southern hemisphere
         else:
-            return 180  # Face north in southern hemisphere
+            return 180  # Face south in northern hemisphere
 
     def _is_cache_valid(self) -> bool:
         """Check if cached data is still valid"""
@@ -560,7 +558,7 @@ class SolarForecastClient:
         daily_forecasts = []
         today = datetime.now().strftime("%Y-%m-%d")
 
-        for date_str, wh in sorted(daily_wh.items())[:7]:
+        for date_str, wh in sorted(daily_wh.items())[:4]:
             dt = datetime.strptime(date_str, "%Y-%m-%d")
             kwh = wh / 1000.0
 
@@ -696,7 +694,6 @@ class WeatherAnalyser:
                 bad_weather_days.append(day["date"])
 
         forecast["bad_weather_days"] = bad_weather_days
-        forecast["consecutive_bad_days"] = self._count_consecutive_bad_days(daily)
 
         return forecast
 
@@ -716,16 +713,6 @@ class WeatherAnalyser:
             return True
 
         return False
-
-    def _count_consecutive_bad_days(self, daily: List[Dict]) -> int:
-        """Count consecutive bad weather days starting from today"""
-        count = 0
-        for day in daily:
-            if day.get("is_bad_weather"):
-                count += 1
-            else:
-                break
-        return count
 
     def should_skip_discharge(
         self,

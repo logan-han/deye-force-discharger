@@ -36,14 +36,14 @@ The scheduler monitors the current time, battery SoC, and weather forecast, cont
 
 The system can automatically skip battery discharge when bad weather is forecasted. This helps preserve battery charge for cloudy/rainy days when solar generation will be insufficient.
 
-**Why this matters:** During consecutive bad weather days, solar panels will not generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
+**Why this matters:** During bad weather, solar panels will not generate enough power to recharge the battery. By skipping discharge before bad weather, the battery retains enough charge to cover household needs without importing from the grid.
 
 **How it works:**
-- Fetches 7-day weather forecast from Open-Meteo (free, no API key required)
+- Fetches 4-day weather forecast from Open-Meteo (free, no API key required)
 - Gets solar production forecasts from forecast.solar for accurate predictions
-- Analyses conditions: rain, thunderstorms, drizzle, snow, high cloud cover (>70%)
-- If bad weather is expected for X consecutive days (configurable, default 2), discharge is skipped
-- Displayed in the web UI with forecast cards showing good/bad days
+- Compares tomorrow's solar forecast against your minimum threshold (configurable)
+- If solar production is expected to be below threshold, discharge is skipped
+- Displayed in the web UI with forecast cards showing solar estimates
 
 ## Solar Output Estimates
 

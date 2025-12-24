@@ -90,8 +90,7 @@ class TestAppWeatherIntegration:
             "success": True,
             "daily": [
                 {"date": "2023-12-22", "condition": "Clear", "is_bad_weather": False}
-            ],
-            "consecutive_bad_days": 0
+            ]
         }
 
         # Initialise weather client
@@ -272,8 +271,7 @@ class TestShouldSkipDischargeForWeather:
     def test_skip_bad_weather(self, mock_forecast):
         """Test skip check triggers for bad weather"""
         mock_forecast.return_value = {
-            "success": True,
-            "consecutive_bad_days": 3
+            "success": True
         }
 
         with patch('app.DeyeCloudClient'):
@@ -281,12 +279,12 @@ class TestShouldSkipDischargeForWeather:
             app_module.config = {"weather": {"enabled": True, "min_solar_threshold_kwh": 5.0}}
             app_module.weather_client = Mock()
             app_module.weather_analyser = Mock()
-            app_module.weather_analyser.should_skip_discharge.return_value = (True, "3 bad days")
+            app_module.weather_analyser.should_skip_discharge.return_value = (True, "Low solar forecast")
 
             should_skip, reason = app_module.should_skip_discharge_for_weather()
 
             assert should_skip is True
-            assert "3 bad days" in reason
+            assert "Low solar" in reason
 
 
 class TestGetWeatherForecast:
@@ -391,7 +389,7 @@ class TestSchedulerWeatherIntegration:
     def test_scheduler_skips_for_weather(self, mock_window, mock_weather_skip):
         """Test scheduler skips discharge when weather is bad"""
         mock_window.return_value = True
-        mock_weather_skip.return_value = (True, "Bad weather for 3 days")
+        mock_weather_skip.return_value = (True, "Low solar forecast")
 
         with patch('app.DeyeCloudClient') as mock_deye:
             mock_client = Mock()
@@ -1295,7 +1293,7 @@ class TestSchedulerLoop:
     def test_scheduler_weather_skip_logs(self, mock_weather, mock_window, mock_sleep):
         """Test scheduler logs weather skip"""
         mock_window.return_value = True
-        mock_weather.return_value = (True, "Bad weather for 3 days")
+        mock_weather.return_value = (True, "Low solar forecast")
 
         with patch('app.DeyeCloudClient') as mock_deye:
             mock_client = Mock()
@@ -1336,7 +1334,7 @@ class TestSchedulerLoop:
             app_module.scheduler_loop()
 
             assert app_module.current_state["weather_skip_active"] is True
-            assert app_module.current_state["weather_skip_reason"] == "Bad weather for 3 days"
+            assert app_module.current_state["weather_skip_reason"] == "Low solar forecast"
 
     @patch('app.time.sleep')
     @patch('app.is_within_discharge_window')
