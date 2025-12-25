@@ -2925,3 +2925,835 @@ class TestShouldSkipDischargeEdgeCases:
             should_skip, reason = app_module.should_skip_discharge_for_weather()
 
             assert should_skip is False
+
+
+class TestAppAdditionalCoverage:
+    """Additional tests to achieve 100% coverage in app.py"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_instance.get_battery_info.return_value = {"soc": 75, "power": 1000, "inverter_capacity": 10000}
+            mock_instance.get_tou_settings.return_value = {"success": True, "timeUseSettingItems": []}
+            mock_instance.get_device_latest_data.return_value = {"soc": 75}
+            mock_instance.get_soc.return_value = 75
+            mock_instance.get_inverter_capacity.return_value = 10000
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {"device_sn": "TEST123"},
+                "schedule": {
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30",
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "max_discharge_power": 10000
+                },
+                "weather": {"enabled": False}
+            }
+            app_module.client = mock_instance
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module, mock_instance
+
+
+class TestInitClientBatteryInfo:
+    """Tests for init_client battery info fetching"""
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_with_battery_info(self, mock_deye):
+        """Test client init fetches battery info successfully"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+        mock_client.get_battery_info.return_value = {
+            "soc": 80,
+            "power": 2000,
+            "inverter_capacity": 8000
+        }
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {
+            "mode": "unknown",
+            "soc": None,
+            "battery_power": None,
+            "force_discharge_active": False,
+            "last_error": None,
+            "inverter_capacity": None
+        }
+
+        app_module.init_client()
+
+        assert app_module.current_state["soc"] == 80
+        assert app_module.current_state["battery_power"] == 2000
+        assert app_module.current_state["inverter_capacity"] == 8000
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_battery_info_no_capacity(self, mock_deye):
+        """Test client init fetches inverter capacity separately when not in battery_info"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {"success": True}
+        mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}  # No inverter_capacity
+        mock_client.get_inverter_capacity.return_value = 5000
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {
+            "mode": "unknown",
+            "soc": None,
+            "battery_power": None,
+            "force_discharge_active": False,
+            "last_error": None,
+            "inverter_capacity": None
+        }
+
+        app_module.init_client()
+
+        assert app_module.current_state["inverter_capacity"] == 5000
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_battery_info_no_capacity_fallback(self, mock_deye):
+        """Test client init uses default when capacity not available"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {"success": True}
+        mock_client.get_battery_info.return_value = {"soc": 75, "power": 1000}
+        mock_client.get_inverter_capacity.return_value = None  # Not available
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {
+            "mode": "unknown",
+            "soc": None,
+            "battery_power": None,
+            "force_discharge_active": False,
+            "last_error": None,
+            "inverter_capacity": None
+        }
+
+        app_module.init_client()
+
+        assert app_module.current_state["inverter_capacity"] == 10000  # Default fallback
+
+    @patch('app.DeyeCloudClient')
+    def test_init_client_battery_info_exception(self, mock_deye):
+        """Test client init handles battery info exception"""
+        mock_client = Mock()
+        mock_client.get_work_mode.return_value = {"success": True}
+        mock_client.get_battery_info.side_effect = Exception("Battery API error")
+        mock_deye.return_value = mock_client
+
+        import app as app_module
+        app_module.config = {"deye": {}}
+        app_module.current_state = {
+            "mode": "unknown",
+            "soc": None,
+            "battery_power": None,
+            "force_discharge_active": False,
+            "last_error": None,
+            "inverter_capacity": None
+        }
+
+        app_module.init_client()
+
+        assert app_module.current_state["inverter_capacity"] == 10000  # Default on error
+
+
+class TestInitWeatherClientSolar:
+    """Tests for init_weather_client with solar configuration"""
+
+    @patch('app.SolarForecastClient')
+    @patch('app.WeatherAnalyser')
+    @patch('app.WeatherClient')
+    def test_init_weather_client_with_panel_capacity(self, mock_weather, mock_analyser, mock_solar):
+        """Test weather client init with panel capacity"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "panel_capacity_kw": 6.6,
+                    "solar": {"enabled": True}
+                }
+            }
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.current_state = {"inverter_capacity": 5000}
+
+            app_module.init_weather_client()
+
+            mock_solar.assert_called_once()
+            call_kwargs = mock_solar.call_args[1]
+            assert call_kwargs["kwp"] == 6.6
+
+    @patch('app.SolarForecastClient')
+    @patch('app.WeatherAnalyser')
+    @patch('app.WeatherClient')
+    def test_init_weather_client_with_inverter_capacity_config(self, mock_weather, mock_analyser, mock_solar):
+        """Test weather client init with inverter capacity from config"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "inverter_capacity_kw": 5.0,
+                    "solar": {"enabled": True}
+                }
+            }
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.current_state = {"inverter_capacity": None}
+
+            app_module.init_weather_client()
+
+            mock_solar.assert_called_once()
+            call_kwargs = mock_solar.call_args[1]
+            assert call_kwargs["kwp"] == 6  # 5.0 * 1.25 = 6.25, but int() = 6
+
+    @patch('app.SolarForecastClient')
+    @patch('app.WeatherAnalyser')
+    @patch('app.WeatherClient')
+    def test_init_weather_client_with_api_inverter_capacity(self, mock_weather, mock_analyser, mock_solar):
+        """Test weather client init with inverter capacity from API"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "solar": {"enabled": True}
+                }
+            }
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.current_state = {"inverter_capacity": 8000}  # 8kW
+
+            app_module.init_weather_client()
+
+            mock_solar.assert_called_once()
+            call_kwargs = mock_solar.call_args[1]
+            assert call_kwargs["kwp"] == 10  # 8 * 1.25 = 10
+
+    @patch('app.SolarForecastClient')
+    @patch('app.WeatherAnalyser')
+    @patch('app.WeatherClient')
+    def test_init_weather_client_with_solar_tilt_azimuth(self, mock_weather, mock_analyser, mock_solar):
+        """Test weather client init with custom tilt and azimuth"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "panel_capacity_kw": 5.0,
+                    "solar": {
+                        "enabled": True,
+                        "declination": 30,
+                        "azimuth": 10
+                    }
+                }
+            }
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.current_state = {"inverter_capacity": None}
+
+            app_module.init_weather_client()
+
+            mock_solar.assert_called_once()
+            call_kwargs = mock_solar.call_args[1]
+            assert call_kwargs["declination"] == 30
+            assert call_kwargs["azimuth"] == 10
+
+    @patch('app.WeatherAnalyser')
+    @patch('app.WeatherClient')
+    def test_init_weather_client_solar_disabled(self, mock_weather, mock_analyser):
+        """Test weather client init when solar is disabled"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            app_module.config = {
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "solar": {"enabled": False}
+                }
+            }
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.current_state = {"inverter_capacity": None}
+
+            app_module.init_weather_client()
+
+            assert app_module.solar_client is None
+
+
+class TestGetWeatherForecastAdditional:
+    """Additional tests for get_weather_forecast"""
+
+    def test_forecast_unsuccessful_returns_cached(self):
+        """Test forecast returns cached on unsuccessful result"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            mock_weather_client = Mock()
+            mock_weather_client.get_forecast.return_value = {"success": True}
+
+            mock_analyser = Mock()
+            mock_analyser.analyse_forecast.return_value = {"success": False}
+
+            app_module.weather_client = mock_weather_client
+            app_module.weather_analyser = mock_analyser
+            app_module.config = {"weather": {}}
+            app_module.current_state = {"inverter_capacity": None}
+            app_module.weather_forecast_cache = {
+                "forecast": {"cached": True, "success": True},
+                "last_update": None
+            }
+
+            result = app_module.get_weather_forecast()
+
+            assert result == {"cached": True, "success": True}
+
+    def test_forecast_unsuccessful_no_cache(self):
+        """Test forecast returns None when unsuccessful and no cache"""
+        with patch('app.DeyeCloudClient'):
+            import app as app_module
+            mock_weather_client = Mock()
+            mock_weather_client.get_forecast.return_value = {"success": True}
+
+            mock_analyser = Mock()
+            mock_analyser.analyse_forecast.return_value = {"success": False}
+
+            app_module.weather_client = mock_weather_client
+            app_module.weather_analyser = mock_analyser
+            app_module.config = {"weather": {}}
+            app_module.current_state = {"inverter_capacity": None}
+            app_module.weather_forecast_cache = {
+                "forecast": None,
+                "last_update": None
+            }
+
+            result = app_module.get_weather_forecast()
+
+            assert result is None
+
+
+class TestSetupSearchCities:
+    """Tests for city search during setup"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {"deye": {}, "weather": {}}
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    @patch('app.WeatherClient.search_cities')
+    def test_setup_search_cities_success(self, mock_search, test_client):
+        """Test /api/setup/search-cities returns cities"""
+        client, _ = test_client
+        mock_search.return_value = [
+            {"name": "Sydney", "country": "AU", "display_name": "Sydney, NSW, AU"}
+        ]
+
+        response = client.get('/api/setup/search-cities?q=Sydney')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert len(data["cities"]) == 1
+
+    @patch('app.WeatherClient.search_cities')
+    def test_setup_search_cities_short_query(self, mock_search, test_client):
+        """Test /api/setup/search-cities with short query"""
+        client, _ = test_client
+
+        response = client.get('/api/setup/search-cities?q=S')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert data["cities"] == []
+        mock_search.assert_not_called()
+
+
+class TestSearchCitiesAPI:
+    """Tests for weather city search API"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {"deye": {}, "weather": {}}
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    @patch('app.WeatherClient.search_cities')
+    def test_search_cities_success(self, mock_search, test_client):
+        """Test /api/weather/cities returns cities"""
+        client, _ = test_client
+        mock_search.return_value = [
+            {"name": "Melbourne", "country": "AU", "display_name": "Melbourne, VIC, AU"}
+        ]
+
+        response = client.get('/api/weather/cities?q=Melbourne')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert len(data["cities"]) == 1
+
+    @patch('app.WeatherClient.search_cities')
+    def test_search_cities_short_query(self, mock_search, test_client):
+        """Test /api/weather/cities with short query"""
+        client, _ = test_client
+
+        response = client.get('/api/weather/cities?q=M')
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert data["cities"] == []
+
+
+class TestCompleteSetup:
+    """Tests for setup completion endpoint"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_instance.get_work_mode.return_value = {"success": True}
+            mock_instance.get_battery_info.return_value = {"soc": 75}
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {},
+                "weather": {}
+            }
+            app_module.client = mock_instance
+            app_module.weather_forecast_cache = {"forecast": None, "last_update": None}
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    @patch('app.init_weather_client')
+    @patch('app.init_client')
+    @patch('app.save_config')
+    def test_complete_setup_deye_config(self, mock_save, mock_init_client, mock_init_weather, test_client):
+        """Test /api/setup/complete with Deye config"""
+        client, app_module = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "deye": {
+                    "api_base_url": "https://eu1-developer.deyecloud.com",
+                    "app_id": "my_app_id",
+                    "app_secret": "my_secret",
+                    "email": "test@test.com",
+                    "password": "password123",
+                    "device_sn": "INVERTER123"
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["deye"]["app_id"] == "my_app_id"
+
+    @patch('app.init_weather_client')
+    @patch('app.init_client')
+    @patch('app.save_config')
+    def test_complete_setup_weather_config(self, mock_save, mock_init_client, mock_init_weather, test_client):
+        """Test /api/setup/complete with weather config"""
+        client, app_module = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "weather": {
+                    "enabled": True,
+                    "latitude": -33.8688,
+                    "longitude": 151.2093,
+                    "timezone": "Australia/Sydney",
+                    "city_name": "Sydney, AU"
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["weather"]["enabled"] is True
+
+    @patch('app.init_weather_client')
+    @patch('app.init_client')
+    @patch('app.save_config')
+    def test_complete_setup_solar_config(self, mock_save, mock_init_client, mock_init_weather, test_client):
+        """Test /api/setup/complete with solar config"""
+        client, app_module = test_client
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({
+                "solar": {
+                    "inverter_capacity_kw": 5.0,
+                    "panel_capacity_kw": 6.6
+                }
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["weather"]["panel_capacity_kw"] == 6.6
+
+    @patch('app.save_config')
+    def test_complete_setup_exception(self, mock_save, test_client):
+        """Test /api/setup/complete handles exception"""
+        client, _ = test_client
+        mock_save.side_effect = Exception("File error")
+
+        response = client.post('/api/setup/complete',
+            data=json.dumps({"deye": {}}),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+
+
+class TestWeatherAPIException:
+    """Tests for weather API exception handling"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {
+                "deye": {},
+                "weather": {"enabled": True}
+            }
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    def test_weather_api_exception(self, test_client):
+        """Test /api/weather handles exception"""
+        client, app_module = test_client
+        app_module.weather_client = Mock()
+
+        with patch('app.get_weather_forecast', side_effect=Exception("API error")):
+            response = client.get('/api/weather')
+            data = json.loads(response.data)
+
+            assert response.status_code == 500
+            assert data["success"] is False
+
+
+class TestDeyeTestHTTPErrors:
+    """Tests for Deye connection test HTTP error handling"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {"deye": {}, "weather": {}}
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_401_error(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye handles 401 authentication error"""
+        import requests
+        client, _ = test_client
+
+        mock_response = Mock()
+        mock_response.status_code = 401
+        http_error = requests.exceptions.HTTPError()
+        http_error.response = mock_response
+        mock_deye_class.return_value.get_device_latest_data.side_effect = http_error
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "bad_id",
+                "app_secret": "bad_secret",
+                "email": "test@test.com",
+                "password": "wrong",
+                "device_sn": "ABC123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "authentication" in data["error"].lower()
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_404_error(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye handles 404 error"""
+        import requests
+        client, _ = test_client
+
+        mock_response = Mock()
+        mock_response.status_code = 404
+        http_error = requests.exceptions.HTTPError()
+        http_error.response = mock_response
+        mock_deye_class.return_value.get_device_latest_data.side_effect = http_error
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "test_id",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test",
+                "device_sn": "ABC123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "404" in data["error"]
+
+    @patch('app.DeyeCloudClient')
+    def test_test_deye_other_http_error(self, mock_deye_class, test_client):
+        """Test /api/setup/test-deye handles other HTTP errors"""
+        import requests
+        client, _ = test_client
+
+        mock_response = Mock()
+        mock_response.status_code = 500
+        http_error = requests.exceptions.HTTPError()
+        http_error.response = mock_response
+        mock_deye_class.return_value.get_device_latest_data.side_effect = http_error
+
+        response = client.post('/api/setup/test-deye',
+            data=json.dumps({
+                "app_id": "test_id",
+                "app_secret": "test_secret",
+                "email": "test@test.com",
+                "password": "test",
+                "device_sn": "ABC123"
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is False
+        assert "500" in data["error"]
+
+
+class TestWeatherConfigUpdateAdditional:
+    """Additional tests for weather config update"""
+
+    @pytest.fixture
+    def test_client(self):
+        """Create test client"""
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_instance = Mock()
+            mock_deye.return_value = mock_instance
+
+            import app as app_module
+            app_module.config = {"deye": {}, "weather": {}}
+            app_module.weather_client = None
+            app_module.weather_analyser = None
+            app_module.solar_client = None
+            app_module.weather_forecast_cache = {"forecast": None, "last_update": None}
+            app_module.app.testing = True
+
+            yield app_module.app.test_client(), app_module
+
+    @patch('app.init_weather_client')
+    @patch('app.save_config')
+    def test_update_weather_config_all_fields(self, mock_save, mock_init, test_client):
+        """Test POST /api/weather/config updates all fields"""
+        client, app_module = test_client
+
+        response = client.post('/api/weather/config',
+            data=json.dumps({
+                "enabled": True,
+                "city_name": "Sydney, AU",
+                "latitude": -33.8688,
+                "longitude": 151.2093,
+                "timezone": "Australia/Sydney",
+                "min_solar_threshold_kwh": 15.0,
+                "bad_weather_conditions": ["Rain", "Snow"],
+                "min_cloud_cover_percent": 80,
+                "inverter_capacity_kw": 5.0,
+                "panel_capacity_kw": 6.6,
+                "panel_tilt": 25,
+                "panel_azimuth": 0
+            }),
+            content_type='application/json'
+        )
+        data = json.loads(response.data)
+
+        assert response.status_code == 200
+        assert data["success"] is True
+        assert app_module.config["weather"]["city_name"] == "Sydney, AU"
+        assert app_module.config["weather"]["bad_weather_conditions"] == ["Rain", "Snow"]
+        assert app_module.config["weather"]["solar"]["declination"] == 25
+        assert app_module.config["weather"]["solar"]["azimuth"] == 0
+
+
+class TestSchedulerHysteresis:
+    """Tests for scheduler hysteresis logic"""
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_free_energy_window')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_reactivation_margin(self, mock_weather, mock_window, mock_free, mock_sleep):
+        """Test scheduler uses reactivation margin when not discharging"""
+        mock_window.return_value = True
+        mock_free.return_value = False
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 52, "power": 1000}  # Just above cutoff
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "enabled": True,
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "reactivation_margin": 5,  # Need SoC > 55 to start
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                },
+                "free_energy": {"enabled": False}
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None,
+                "free_energy_active": False,
+                "inverter_capacity": 10000
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Should NOT activate discharge because SoC 52 < cutoff 50 + margin 5 = 55
+            mock_client.set_work_mode.assert_not_called()
+
+    @patch('app.time.sleep')
+    @patch('app.is_within_free_energy_window')
+    @patch('app.is_within_discharge_window')
+    @patch('app.should_skip_discharge_for_weather')
+    def test_scheduler_force_discharge_disabled(self, mock_weather, mock_window, mock_free, mock_sleep):
+        """Test scheduler respects force discharge enabled setting"""
+        mock_window.return_value = True
+        mock_free.return_value = False
+        mock_weather.return_value = (False, "Good weather")
+
+        with patch('app.DeyeCloudClient') as mock_deye:
+            mock_client = Mock()
+            mock_client.get_battery_info.return_value = {"soc": 80, "power": 1000}
+            mock_client.get_work_mode.return_value = {"success": True, "systemWorkMode": "ZERO_EXPORT_TO_CT"}
+            mock_deye.return_value = mock_client
+
+            import app as app_module
+            app_module.client = mock_client
+            app_module.config = {
+                "schedule": {
+                    "enabled": False,  # Disabled
+                    "min_soc_reserve": 20,
+                    "force_discharge_cutoff_soc": 50,
+                    "force_discharge_start": "17:30",
+                    "force_discharge_end": "19:30"
+                },
+                "free_energy": {"enabled": False}
+            }
+            app_module.current_state = {
+                "mode": "ZERO_EXPORT_TO_CT",
+                "force_discharge_active": False,
+                "soc": None,
+                "battery_power": None,
+                "last_check": None,
+                "last_error": None,
+                "scheduler_status": "stopped",
+                "weather_skip_active": False,
+                "weather_skip_reason": None,
+                "free_energy_active": False,
+                "inverter_capacity": 10000
+            }
+
+            app_module.scheduler_running = True
+
+            def stop_after_one(*args):
+                app_module.scheduler_running = False
+
+            mock_sleep.side_effect = stop_after_one
+
+            app_module.scheduler_loop()
+
+            # Should NOT activate discharge because it's disabled
+            mock_client.set_work_mode.assert_not_called()

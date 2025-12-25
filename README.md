@@ -2,6 +2,7 @@
 
 [![Docker Hub](https://img.shields.io/docker/v/loganhan123/deye-force-discharger?label=Docker%20Hub&logo=docker)](https://hub.docker.com/r/loganhan123/deye-force-discharger)
 [![Docker Pulls](https://img.shields.io/docker/pulls/loganhan123/deye-force-discharger)](https://hub.docker.com/r/loganhan123/deye-force-discharger)
+[![codecov](https://codecov.io/gh/logan-han/deye-force-discharger/graph/badge.svg)](https://codecov.io/gh/logan-han/deye-force-discharger)
 
 A Python application to automate battery discharge scheduling for Deye hybrid inverters via the Deye Cloud API.
 

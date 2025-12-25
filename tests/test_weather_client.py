@@ -644,3 +644,518 @@ class TestWeatherAnalyserWithSolarClient:
 
         assert result["daily"][0]["estimated_solar_kwh"] == 20.0
         assert result["daily"][0]["solar_source"] == "weather_estimate"
+
+
+class TestWeatherClientAdditionalCoverage:
+    """Additional tests for WeatherClient to achieve full coverage"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(
+            latitude=-33.8688,
+            longitude=151.2093,
+            timezone_str="Australia/Sydney"
+        )
+
+    def test_weather_code_to_condition_fog(self):
+        """Test weather codes 45, 48 return Fog"""
+        assert self.client._weather_code_to_condition(45) == "Fog"
+        assert self.client._weather_code_to_condition(48) == "Fog"
+
+    def test_weather_code_to_condition_drizzle(self):
+        """Test weather codes 51-57 return Drizzle"""
+        assert self.client._weather_code_to_condition(51) == "Drizzle"
+        assert self.client._weather_code_to_condition(53) == "Drizzle"
+        assert self.client._weather_code_to_condition(55) == "Drizzle"
+        assert self.client._weather_code_to_condition(56) == "Drizzle"  # Freezing drizzle
+        assert self.client._weather_code_to_condition(57) == "Drizzle"
+
+    def test_weather_code_to_condition_freezing_rain(self):
+        """Test weather codes 66, 67 return Rain (freezing rain)"""
+        assert self.client._weather_code_to_condition(66) == "Rain"
+        assert self.client._weather_code_to_condition(67) == "Rain"
+
+    def test_weather_code_to_condition_snow(self):
+        """Test weather codes 71-77, 85, 86 return Snow"""
+        assert self.client._weather_code_to_condition(71) == "Snow"
+        assert self.client._weather_code_to_condition(73) == "Snow"
+        assert self.client._weather_code_to_condition(75) == "Snow"
+        assert self.client._weather_code_to_condition(77) == "Snow"
+        assert self.client._weather_code_to_condition(85) == "Snow"
+        assert self.client._weather_code_to_condition(86) == "Snow"
+
+    def test_weather_code_to_condition_showers(self):
+        """Test weather codes 80-82 return Rain (showers)"""
+        assert self.client._weather_code_to_condition(80) == "Rain"
+        assert self.client._weather_code_to_condition(81) == "Rain"
+        assert self.client._weather_code_to_condition(82) == "Rain"
+
+    def test_weather_code_to_condition_unknown(self):
+        """Test unknown weather code returns Clouds"""
+        assert self.client._weather_code_to_condition(999) == "Clouds"
+
+    def test_condition_to_icon(self):
+        """Test icon mapping for all conditions"""
+        assert self.client._condition_to_icon("Clear") == "01d"
+        assert self.client._condition_to_icon("Clouds") == "03d"
+        assert self.client._condition_to_icon("Rain") == "10d"
+        assert self.client._condition_to_icon("Drizzle") == "09d"
+        assert self.client._condition_to_icon("Thunderstorm") == "11d"
+        assert self.client._condition_to_icon("Snow") == "13d"
+        assert self.client._condition_to_icon("Fog") == "50d"
+        assert self.client._condition_to_icon("Unknown") == "01d"  # Default fallback
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_rate_limit_429_with_retry(self, mock_sleep, mock_get):
+        """Test handling of 429 rate limit with retry"""
+        mock_response_429 = Mock()
+        mock_response_429.status_code = 429
+        mock_response_429.headers = {"Retry-After": "5"}
+
+        mock_response_ok = Mock()
+        mock_response_ok.status_code = 200
+        mock_response_ok.raise_for_status = Mock()
+        mock_response_ok.json.return_value = {
+            "daily": {"time": [], "temperature_2m_max": [], "temperature_2m_min": [], "weather_code": [], "precipitation_sum": [], "precipitation_probability_max": []},
+            "hourly": {"time": [], "cloud_cover": [], "precipitation_probability": [], "weather_code": []}
+        }
+
+        mock_get.side_effect = [mock_response_429, mock_response_ok]
+
+        result = self.client.get_forecast()
+        assert result["success"] is True
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_rate_limit_429_all_retries_exhausted(self, mock_sleep, mock_get):
+        """Test 429 rate limit when all retries are exhausted"""
+        mock_response = Mock()
+        mock_response.status_code = 429
+        mock_response.headers = {}
+        mock_get.return_value = mock_response
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_connection_refused_error(self, mock_sleep, mock_get):
+        """Test handling of connection refused error"""
+        mock_get.side_effect = requests.exceptions.ConnectionError("Connection refused")
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result.get("is_temporary") is True
+
+    @patch('weather_client.requests.get')
+    @patch('weather_client.time.sleep')
+    def test_generic_connection_error_with_retry(self, mock_sleep, mock_get):
+        """Test handling of generic connection error with retry"""
+        mock_get.side_effect = [
+            requests.exceptions.ConnectionError("Random network error"),
+            requests.exceptions.ConnectionError("Random network error"),
+            requests.exceptions.ConnectionError("Random network error")
+        ]
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result.get("is_temporary") is True
+
+    def test_estimate_solar_output_no_date_data(self):
+        """Test hourly solar estimate when date has no data"""
+        self.client._cache = {"hourly_data": {"2023-12-22": []}}
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-23")
+        assert result is None
+
+    def test_estimate_solar_output_empty_hourly_data(self):
+        """Test hourly solar estimate with empty hourly data for date"""
+        self.client._cache = {"hourly_data": {"2023-12-22": []}}
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is None
+
+    def test_estimate_solar_output_latitude_ranges(self):
+        """Test hourly solar estimate for different latitude ranges"""
+        hourly_data = [
+            {"hour": h, "clouds": 10, "condition": "Clear", "pop": 0}
+            for h in range(6, 19)
+        ]
+
+        # Test equatorial (lat < 15)
+        client = WeatherClient(latitude=10, longitude=100)
+        client._cache = {"hourly_data": {"2023-12-22": hourly_data}}
+        result = client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is not None and result > 20
+
+        # Test tropical (15 <= lat < 25)
+        client = WeatherClient(latitude=20, longitude=100)
+        client._cache = {"hourly_data": {"2023-12-22": hourly_data}}
+        result = client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is not None
+
+        # Test temperate (35 <= lat < 45)
+        client = WeatherClient(latitude=40, longitude=100)
+        client._cache = {"hourly_data": {"2023-12-22": hourly_data}}
+        result = client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is not None
+
+        # Test high latitude (lat >= 45)
+        client = WeatherClient(latitude=50, longitude=100)
+        client._cache = {"hourly_data": {"2023-12-22": hourly_data}}
+        result = client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is not None
+
+    def test_estimate_solar_output_bad_conditions(self):
+        """Test hourly solar estimate with various bad weather conditions"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 9, "clouds": 50, "condition": "Thunderstorm", "pop": 80},
+                    {"hour": 12, "clouds": 60, "condition": "Snow", "pop": 70},
+                    {"hour": 15, "clouds": 70, "condition": "Fog", "pop": 40}
+                ]
+            }
+        }
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        assert result is not None
+        assert result < 10  # Should be low due to bad conditions
+
+    def test_estimate_solar_output_nighttime_hours_ignored(self):
+        """Test that nighttime hours are not counted in solar estimate"""
+        self.client._cache = {
+            "hourly_data": {
+                "2023-12-22": [
+                    {"hour": 0, "clouds": 0, "condition": "Clear", "pop": 0},
+                    {"hour": 3, "clouds": 0, "condition": "Clear", "pop": 0},
+                    {"hour": 5, "clouds": 0, "condition": "Clear", "pop": 0},
+                    {"hour": 19, "clouds": 0, "condition": "Clear", "pop": 0},
+                    {"hour": 22, "clouds": 0, "condition": "Clear", "pop": 0},
+                ]
+            }
+        }
+        result = self.client.estimate_solar_output_hourly(5.0, "2023-12-22")
+        # Should return None because no daylight hours in data
+        assert result is None
+
+
+class TestSolarForecastClientAdditionalCoverage:
+    """Additional tests for SolarForecastClient"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = SolarForecastClient(
+            latitude=-33.8688,
+            longitude=151.2093,
+            kwp=6.6
+        )
+
+    def test_init_auto_tilt_and_azimuth(self):
+        """Test auto-calculation of tilt and azimuth"""
+        # Southern hemisphere (should face north, azimuth=0)
+        client = SolarForecastClient(latitude=-33.8688, longitude=151.2093, kwp=5.0)
+        assert client.declination == 25  # Default optimal tilt
+        assert client.azimuth == 0  # North-facing for southern hemisphere
+
+        # Northern hemisphere (should face south, azimuth=180)
+        client = SolarForecastClient(latitude=40.7128, longitude=-74.0060, kwp=5.0)
+        assert client.azimuth == 180  # South-facing for northern hemisphere
+
+    def test_is_cache_valid_no_cache(self):
+        """Test cache validity when no cache exists"""
+        assert self.client._is_cache_valid() is False
+
+    def test_is_cache_valid_expired(self):
+        """Test cache validity when cache is expired"""
+        self.client._cache_time = datetime(2020, 1, 1)
+        assert self.client._is_cache_valid() is False
+
+    def test_is_cache_valid_fresh(self):
+        """Test cache validity when cache is fresh"""
+        self.client._cache_time = datetime.now()
+        assert self.client._is_cache_valid() is True
+
+    @patch('weather_client.requests.get')
+    def test_get_forecast_bad_request_400(self, mock_get):
+        """Test handling of 400 bad request error"""
+        mock_response = Mock()
+        mock_response.status_code = 400
+        mock_response.json.return_value = {"message": {"text": "Bad request"}}
+        mock_get.return_value = mock_response
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result["is_temporary"] is False
+
+    @patch('weather_client.requests.get')
+    def test_get_forecast_timeout(self, mock_get):
+        """Test handling of request timeout"""
+        mock_get.side_effect = requests.exceptions.Timeout("Request timed out")
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result["is_temporary"] is True
+
+    @patch('weather_client.requests.get')
+    def test_get_forecast_request_exception(self, mock_get):
+        """Test handling of generic request exception"""
+        mock_get.side_effect = requests.exceptions.RequestException("Network error")
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result["is_temporary"] is True
+
+    @patch('weather_client.requests.get')
+    def test_get_forecast_unexpected_exception(self, mock_get):
+        """Test handling of unexpected exception"""
+        mock_get.side_effect = ValueError("Unexpected error")
+
+        result = self.client.get_forecast()
+        assert result["success"] is False
+        assert result["is_temporary"] is False
+
+    @patch('weather_client.requests.get')
+    def test_get_daily_estimate_forecast_fails(self, mock_get):
+        """Test get_daily_estimate when forecast fetch fails"""
+        mock_get.side_effect = requests.exceptions.Timeout()
+
+        result = self.client.get_daily_estimate("2023-12-22")
+        assert result is None
+
+    @patch('weather_client.requests.get')
+    def test_get_daily_estimate_date_not_found(self, mock_get):
+        """Test get_daily_estimate when date is not in forecast"""
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "result": {"watt_hours_day": {"2023-12-22": 25000}, "watts": {}, "watt_hours": {}},
+            "message": {}
+        }
+        mock_get.return_value = mock_response
+
+        result = self.client.get_daily_estimate("2023-12-25")  # Date not in response
+        assert result is None
+
+    @patch('weather_client.requests.get')
+    def test_get_daily_estimate_default_tomorrow(self, mock_get):
+        """Test get_daily_estimate defaults to tomorrow"""
+        from datetime import datetime, timedelta
+        tomorrow = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
+
+        mock_response = Mock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {
+            "result": {"watt_hours_day": {tomorrow: 30000}, "watts": {}, "watt_hours": {}},
+            "message": {}
+        }
+        mock_get.return_value = mock_response
+
+        result = self.client.get_daily_estimate()  # No date specified
+        assert result == 30.0
+
+
+class TestWeatherAnalyserAdditionalCoverage:
+    """Additional tests for WeatherAnalyser"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.analyser = WeatherAnalyser()
+
+    def test_analyse_forecast_unsuccessful(self):
+        """Test analyse_forecast with unsuccessful forecast"""
+        forecast = {"success": False, "error": "API error"}
+        result = self.analyser.analyse_forecast(forecast)
+        assert result["success"] is False
+
+    def test_analyse_forecast_empty_daily(self):
+        """Test analyse_forecast with empty daily array"""
+        forecast = {"success": True, "daily": []}
+        result = self.analyser.analyse_forecast(forecast)
+        assert result["daily"] == []
+
+    def test_analyse_forecast_solar_client_fails(self):
+        """Test analyse_forecast falls back when solar client fails"""
+        forecast = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}]
+        }
+
+        mock_solar_client = Mock()
+        mock_solar_client.get_forecast.return_value = {"success": False}
+
+        result = self.analyser.analyse_forecast(
+            forecast,
+            solar_client=mock_solar_client
+        )
+
+        assert result["daily"][0].get("has_solar_prediction") is False
+
+    def test_analyse_forecast_weather_estimate_returns_none(self):
+        """Test analyse_forecast when weather estimate returns None"""
+        forecast = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}]
+        }
+
+        mock_weather_client = Mock()
+        mock_weather_client.estimate_solar_output_hourly.return_value = None
+
+        result = self.analyser.analyse_forecast(
+            forecast,
+            panel_capacity_kw=5.0,
+            weather_client=mock_weather_client
+        )
+
+        assert result["daily"][0]["has_solar_prediction"] is False
+
+    def test_analyse_forecast_no_solar_prediction_available(self):
+        """Test analyse_forecast without any solar prediction source"""
+        forecast = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}]
+        }
+
+        result = self.analyser.analyse_forecast(forecast)
+
+        assert result["daily"][0]["has_solar_prediction"] is False
+        assert result["daily"][0]["estimated_solar_kwh"] is None
+
+    def test_analyse_forecast_bad_weather_based_on_solar(self):
+        """Test bad weather detection based on solar threshold"""
+        forecast = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "condition": "Clear", "clouds": 10, "pop": 5}]
+        }
+
+        mock_solar_client = Mock()
+        mock_solar_client.get_forecast.return_value = {
+            "success": True,
+            "daily": [{"date": "2023-12-22", "estimated_kwh": 3.0}]  # Below threshold
+        }
+
+        result = self.analyser.analyse_forecast(
+            forecast,
+            solar_client=mock_solar_client,
+            min_solar_threshold=10.0
+        )
+
+        assert result["daily"][0]["is_bad_weather"] is True
+
+    def test_should_skip_discharge_unsuccessful_forecast(self):
+        """Test should_skip_discharge with unsuccessful forecast"""
+        forecast = {"success": False}
+        should_skip, reason = self.analyser.should_skip_discharge(forecast)
+        assert should_skip is False
+        assert "unavailable" in reason
+
+    def test_should_skip_discharge_no_threshold(self):
+        """Test should_skip_discharge without threshold"""
+        forecast = {"success": True, "daily": [{"estimated_solar_kwh": 5.0}]}
+        should_skip, reason = self.analyser.should_skip_discharge(forecast)
+        assert should_skip is False
+        assert "not configured" in reason
+
+    def test_should_skip_discharge_zero_threshold(self):
+        """Test should_skip_discharge with zero threshold"""
+        forecast = {"success": True, "daily": [{"estimated_solar_kwh": 5.0}]}
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=0)
+        assert should_skip is False
+
+    def test_should_skip_discharge_no_solar_prediction(self):
+        """Test should_skip_discharge when solar prediction not available"""
+        forecast = {
+            "success": True,
+            "daily": [{"day_name": "Today"}, {"day_name": "Tomorrow", "estimated_solar_kwh": None}]
+        }
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=10.0)
+        assert should_skip is False
+        assert "not available" in reason
+
+    def test_should_skip_discharge_single_day_forecast(self):
+        """Test should_skip_discharge with only today in forecast"""
+        forecast = {
+            "success": True,
+            "daily": [{"day_name": "Today", "estimated_solar_kwh": 5.0}]
+        }
+        should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=10.0)
+        assert should_skip is True  # Falls back to today when no tomorrow
+
+    def test_is_bad_weather_drizzle(self):
+        """Test bad weather detection for drizzle"""
+        day = {"condition": "Drizzle", "clouds": 50, "pop": 30}
+        assert self.analyser._is_bad_weather_day(day) is True
+
+    def test_is_bad_weather_snow(self):
+        """Test bad weather detection for snow"""
+        day = {"condition": "Snow", "clouds": 50, "pop": 30}
+        assert self.analyser._is_bad_weather_day(day) is True
+
+
+class TestWeatherClientParseForecast:
+    """Tests for _parse_forecast function edge cases"""
+
+    def setup_method(self):
+        """Set up test fixtures"""
+        self.client = WeatherClient(latitude=-33.8688, longitude=151.2093)
+
+    def test_parse_forecast_handles_missing_hourly_data(self):
+        """Test parsing handles missing hourly data gracefully"""
+        data = {
+            "daily": {
+                "time": ["2023-12-22"],
+                "temperature_2m_max": [28.0],
+                "temperature_2m_min": [18.0],
+                "weather_code": [0],
+                "precipitation_sum": [0.0],
+                "precipitation_probability_max": [10]
+            },
+            "hourly": {
+                "time": [],
+                "cloud_cover": [],
+                "precipitation_probability": [],
+                "weather_code": []
+            }
+        }
+
+        result = self.client._parse_forecast(data)
+        assert result["success"] is True
+        assert len(result["daily"]) == 1
+
+    def test_parse_forecast_handles_partial_hourly_data(self):
+        """Test parsing handles partial hourly data"""
+        data = {
+            "daily": {
+                "time": ["2023-12-22"],
+                "temperature_2m_max": [28.0],
+                "temperature_2m_min": [18.0],
+                "weather_code": [0],
+                "precipitation_sum": [0.0],
+                "precipitation_probability_max": [10]
+            },
+            "hourly": {
+                "time": ["2023-12-22T12:00"],
+                "cloud_cover": [],  # Shorter than time array
+                "precipitation_probability": [],
+                "weather_code": []
+            }
+        }
+
+        result = self.client._parse_forecast(data)
+        assert result["success"] is True
+
+    def test_parse_forecast_limits_to_4_days(self):
+        """Test parsing limits forecast to 4 days"""
+        data = {
+            "daily": {
+                "time": ["2023-12-22", "2023-12-23", "2023-12-24", "2023-12-25", "2023-12-26", "2023-12-27"],
+                "temperature_2m_max": [28.0, 27.0, 26.0, 25.0, 24.0, 23.0],
+                "temperature_2m_min": [18.0, 17.0, 16.0, 15.0, 14.0, 13.0],
+                "weather_code": [0, 1, 2, 3, 4, 5],
+                "precipitation_sum": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                "precipitation_probability_max": [10, 20, 30, 40, 50, 60]
+            },
+            "hourly": {"time": [], "cloud_cover": [], "precipitation_probability": [], "weather_code": []}
+        }
+
+        result = self.client._parse_forecast(data)
+        assert len(result["daily"]) == 4
