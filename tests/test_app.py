@@ -3127,8 +3127,8 @@ class TestInitWeatherClientSolar:
     @patch('app.SolarForecastClient')
     @patch('app.WeatherAnalyser')
     @patch('app.WeatherClient')
-    def test_init_weather_client_with_api_inverter_capacity(self, mock_weather, mock_analyser, mock_solar):
-        """Test weather client init with inverter capacity from API"""
+    def test_init_weather_client_with_default_fallback(self, mock_weather, mock_analyser, mock_solar):
+        """Test weather client init falls back to default when no capacity configured"""
         with patch('app.DeyeCloudClient'):
             import app as app_module
             app_module.config = {
@@ -3143,13 +3143,13 @@ class TestInitWeatherClientSolar:
             app_module.weather_client = None
             app_module.weather_analyser = None
             app_module.solar_client = None
-            app_module.current_state = {"inverter_capacity": 8000}  # 8kW
+            app_module.current_state = {"inverter_capacity": 8000}  # Ignored - not used
 
             app_module.init_weather_client()
 
             mock_solar.assert_called_once()
             call_kwargs = mock_solar.call_args[1]
-            assert call_kwargs["kwp"] == 10  # 8 * 1.25 = 10
+            assert call_kwargs["kwp"] == 5.0  # Default fallback
 
     @patch('app.SolarForecastClient')
     @patch('app.WeatherAnalyser')

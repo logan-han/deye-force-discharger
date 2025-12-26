@@ -161,15 +161,11 @@ def init_weather_client():
         # Use panel capacity if set, otherwise estimate from inverter capacity (typical 1.25x oversizing)
         panel_kw = weather_config.get("panel_capacity_kw", 0)
         inverter_kw = weather_config.get("inverter_capacity_kw", 0)
-        # Also check inverter capacity from current_state (from Deye API)
-        api_inverter_kw = (current_state.get("inverter_capacity") or 0) / 1000
 
         if panel_kw and panel_kw > 0:
             kwp = panel_kw
         elif inverter_kw and inverter_kw > 0:
             kwp = int(inverter_kw * 1.25)  # Match Android app behavior
-        elif api_inverter_kw and api_inverter_kw > 0:
-            kwp = int(api_inverter_kw * 1.25)
         else:
             kwp = 5.0  # Default fallback
 
