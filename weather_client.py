@@ -631,8 +631,8 @@ class WeatherAnalyser:
 
         Args:
             forecast: Forecast data from weather client
-            panel_capacity_kw: Panel capacity for weather-based solar estimation
-            weather_client: WeatherClient instance for hourly solar calculations
+            panel_capacity_kw: Panel capacity (unused, kept for compatibility)
+            weather_client: WeatherClient instance (unused, kept for compatibility)
             solar_client: SolarForecastClient for accurate solar predictions
             min_solar_threshold: Minimum solar kWh to consider a "good" day
         """
@@ -642,17 +642,19 @@ class WeatherAnalyser:
         daily = forecast["daily"]
         bad_weather_days = []
 
-        # Try to get solar forecast from forecast.solar first
+        # Try to get solar forecast from forecast.solar
         solar_forecast = None
         if solar_client:
             solar_forecast = solar_client.get_forecast()
             if solar_forecast.get("success"):
                 logger.info("Using forecast.solar for solar predictions")
+            elif solar_forecast.get("is_temporary"):
+                logger.warning("forecast.solar temporarily unavailable (rate limited or timeout)")
 
         for day in daily:
             date_str = day.get("date", "")
 
-            # Priority 1: Use forecast.solar if available
+            # Use forecast.solar if available
             if solar_forecast and solar_forecast.get("success"):
                 for solar_day in solar_forecast.get("daily", []):
                     if solar_day["date"] == date_str:
@@ -663,27 +665,14 @@ class WeatherAnalyser:
                 else:
                     day["estimated_solar_kwh"] = None
                     day["has_solar_prediction"] = False
-
-            # Priority 2: Fall back to weather-based estimation
-            if not day.get("has_solar_prediction") and panel_capacity_kw and panel_capacity_kw > 0 and weather_client:
-                hourly_estimate = weather_client.estimate_solar_output_hourly(
-                    panel_capacity_kw,
-                    date_str
-                )
-
-                if hourly_estimate is not None:
-                    day["estimated_solar_kwh"] = hourly_estimate
-                    day["has_solar_prediction"] = True
-                    day["solar_source"] = "weather_estimate"
-                else:
-                    day["estimated_solar_kwh"] = None
-                    day["has_solar_prediction"] = False
-
-            if not day.get("has_solar_prediction"):
+                    day["solar_source"] = None
+            else:
+                # No API prediction available - don't fall back to weather estimate
                 day["estimated_solar_kwh"] = None
                 day["has_solar_prediction"] = False
+                day["solar_source"] = None
 
-            # Determine if bad weather based on solar prediction
+            # Determine if bad weather based on solar prediction or weather conditions
             if day.get("has_solar_prediction") and min_solar_threshold:
                 is_bad = day["estimated_solar_kwh"] < min_solar_threshold
             else:

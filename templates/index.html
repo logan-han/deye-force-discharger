@@ -1503,6 +1503,8 @@
                 const tempMax = day.temp_max !== null ? Math.round(day.temp_max) : '--';
 
                 const solarEstimate = day.estimated_solar_kwh ? `<div class="solar-estimate">☀️ ~${day.estimated_solar_kwh} kWh</div>` : '';
+                const cloudCover = day.cloud_cover !== null && day.cloud_cover !== undefined ? `${day.cloud_cover}%` : '--';
+                const precip = day.precipitation_probability;
                 forecastHtml += `
                     <div class="${classes.join(' ')}">
                         <div class="day-name">${dayName}</div>
@@ -1510,8 +1512,8 @@
                         <div class="weather-icon">${icon}</div>
                         <div class="condition">${day.condition}</div>
                         <div class="temp">${tempMin}° / ${tempMax}°</div>
-                        <div class="clouds">☁️ ${day.clouds}%</div>
-                        ${day.pop > 0 ? `<div class="pop">💧 ${day.pop}%</div>` : ''}
+                        <div class="clouds">☁️ ${cloudCover}</div>
+                        ${precip !== null && precip > 0 ? `<div class="pop">💧 ${precip}%</div>` : ''}
                         ${solarEstimate}
                     </div>
                 `;

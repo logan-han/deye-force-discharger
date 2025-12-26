@@ -221,7 +221,7 @@ def get_weather_forecast():
             else:
                 capacity_kw = 0
             logger.info(f"Solar capacity for forecast: {capacity_kw} kW (panel={panel_kw}, inverter_config={inverter_kw}, inverter_api={api_inverter_kw})")
-            # Analyse forecast with solar predictions (uses forecast.solar if available, falls back to weather-based)
+            # Analyse forecast with solar predictions (uses forecast.solar if available)
             forecast = weather_analyser.analyse_forecast(
                 forecast,
                 panel_capacity_kw=capacity_kw if capacity_kw > 0 else None,
@@ -952,8 +952,8 @@ def get_weather():
                 "icon": day.get("icon"),
                 "temp_max": day.get("temp_max"),
                 "temp_min": day.get("temp_min"),
-                "cloud_cover": day.get("cloud_cover"),
-                "precipitation_probability": day.get("precipitation_probability"),
+                "cloud_cover": day.get("clouds"),  # Map from internal "clouds" key
+                "precipitation_probability": day.get("pop"),  # Map from internal "pop" key
                 "is_bad_weather": day.get("is_bad_weather", False),
                 "estimated_solar_kwh": day.get("estimated_solar_kwh"),
                 "solar_source": day.get("solar_source")

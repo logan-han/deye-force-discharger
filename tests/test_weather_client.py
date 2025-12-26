@@ -623,8 +623,8 @@ class TestWeatherAnalyserWithSolarClient:
         assert result["daily"][0]["solar_source"] == "forecast.solar"
         assert result["daily"][1]["estimated_solar_kwh"] == 8.0
 
-    def test_analyse_forecast_falls_back_to_weather_estimate(self):
-        """Test that analyse_forecast falls back to weather estimate when solar client unavailable"""
+    def test_analyse_forecast_no_solar_client(self):
+        """Test that analyse_forecast sets None for solar when solar client unavailable"""
         forecast = {
             "success": True,
             "daily": [
@@ -632,18 +632,15 @@ class TestWeatherAnalyserWithSolarClient:
             ]
         }
 
-        # Create a mock weather client with hourly data
-        mock_weather_client = Mock()
-        mock_weather_client.estimate_solar_output_hourly.return_value = 20.0
-
         result = self.analyser.analyse_forecast(
             forecast,
-            panel_capacity_kw=5.0,
-            weather_client=mock_weather_client
+            panel_capacity_kw=5.0
         )
 
-        assert result["daily"][0]["estimated_solar_kwh"] == 20.0
-        assert result["daily"][0]["solar_source"] == "weather_estimate"
+        # Without solar_client, no solar prediction is available
+        assert result["daily"][0]["estimated_solar_kwh"] is None
+        assert result["daily"][0]["has_solar_prediction"] is False
+        assert result["daily"][0]["solar_source"] is None
 
 
 class TestWeatherClientAdditionalCoverage:
