@@ -1039,11 +1039,11 @@ class TestWeatherAnalyserAdditionalCoverage:
         assert result["daily"][0]["is_bad_weather"] is True
 
     def test_should_skip_discharge_unsuccessful_forecast(self):
-        """Test should_skip_discharge with unsuccessful forecast"""
+        """Test should_skip_discharge with unsuccessful forecast - fail-closed"""
         forecast = {"success": False}
         should_skip, reason = self.analyser.should_skip_discharge(forecast)
-        assert should_skip is False
-        assert "unavailable" in reason
+        assert should_skip is True  # Fail-closed: skip discharge when weather data unavailable
+        assert "unavailable" in reason.lower()
 
     def test_should_skip_discharge_no_threshold(self):
         """Test should_skip_discharge without threshold"""
@@ -1059,14 +1059,14 @@ class TestWeatherAnalyserAdditionalCoverage:
         assert should_skip is False
 
     def test_should_skip_discharge_no_solar_prediction(self):
-        """Test should_skip_discharge when solar prediction not available"""
+        """Test should_skip_discharge when solar prediction not available - fail-closed"""
         forecast = {
             "success": True,
             "daily": [{"day_name": "Today"}, {"day_name": "Tomorrow", "estimated_solar_kwh": None}]
         }
         should_skip, reason = self.analyser.should_skip_discharge(forecast, min_solar_kwh=10.0)
-        assert should_skip is False
-        assert "not available" in reason
+        assert should_skip is True  # Fail-closed: skip discharge when solar data unavailable
+        assert "unavailable" in reason.lower()
 
     def test_should_skip_discharge_single_day_forecast(self):
         """Test should_skip_discharge with only today in forecast"""

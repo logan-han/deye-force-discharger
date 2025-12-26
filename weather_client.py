@@ -719,7 +719,7 @@ class WeatherAnalyser:
             Tuple of (should_skip, reason)
         """
         if not forecast.get("success"):
-            return False, "Weather data unavailable"
+            return True, "Weather data unavailable"
 
         if min_solar_kwh is not None and min_solar_kwh > 0:
             daily = forecast.get("daily", [])
@@ -738,6 +738,6 @@ class WeatherAnalyser:
                     else:
                         return False, f"Good solar forecast ({estimated_solar:.1f} kWh on {tomorrow.get('day_name', 'Tomorrow')})"
                 else:
-                    return False, "Solar prediction not available"
+                    return True, "Solar data unavailable"
 
         return False, "Solar threshold not configured"

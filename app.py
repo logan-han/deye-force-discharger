@@ -919,7 +919,7 @@ def get_weather():
             return jsonify({
                 "success": False,
                 "enabled": True,
-                "error": "Weather client not initialised - check API key and location"
+                "error": "Weather client not initialised - check location settings"
             })
 
         forecast = get_weather_forecast()
@@ -930,10 +930,16 @@ def get_weather():
                 "error": "Failed to fetch weather forecast"
             })
 
-        skip_active, _ = should_skip_discharge_for_weather()
+        skip_active, skip_reason = should_skip_discharge_for_weather()
 
-        # Sanitize skip_reason to avoid exposing internal details
-        safe_skip_reason = "Weather conditions unfavorable" if skip_active else "Weather OK"
+        # Map internal reasons to user-friendly messages
+        if skip_active:
+            if "unavailable" in skip_reason.lower():
+                safe_skip_reason = "Solar data unavailable"
+            else:
+                safe_skip_reason = "Weather conditions unfavorable"
+        else:
+            safe_skip_reason = "Weather OK"
 
         # Sanitize forecast to only include UI-safe fields
         safe_forecast = {
