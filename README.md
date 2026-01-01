@@ -189,6 +189,4 @@ Panel tilt and direction are automatically calculated from your location for opt
 
 I have also created an Android app for this and some extra features like showing SoC & charge/discharge status in a 1x1 widget.
 
-Worth considering if you do not have a place to host this.
-
-Drop me an email if you want to be a tester. (logan_at_han.life)
+Worth considering if you do not have a place to host this. https://play.google.com/apps/internaltest/4700272394027823430
