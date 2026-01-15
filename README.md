@@ -189,4 +189,10 @@ Panel tilt and direction are automatically calculated from your location for opt
 
 I have also created an Android app for this and some extra features like showing SoC & charge/discharge status in a 1x1 widget.
 
-Worth considering if you do not have a place to host this. https://play.google.com/apps/internaltest/4700272394027823430
+Worth considering if you do not have a place to host this. 
+
+Join this Google group to become a tester: https://groups.google.com/g/deye-battery-widget-beta-testers then
+
+Web: https://play.google.com/apps/testing/com.deye.batterywidget
+
+Andorid: https://play.google.com/store/apps/details?id=com.deye.batterywidget
